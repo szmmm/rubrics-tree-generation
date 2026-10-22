@@ -45,6 +45,22 @@ def test_gives_up_after_the_parse_retries():
     assert len(llm.calls) == 4
 
 
+class _CutOffOnce(FakeLLM):
+    """The first response stops at max_tokens."""
+
+    async def _complete(self, messages, *, model, temperature, stage):
+        text, usage = await super()._complete(messages, model=model, temperature=temperature,
+                                              stage=stage)
+        return text, {**usage, "finish_reason": "length" if len(self.calls) == 1 else "stop"}
+
+
+def test_a_response_cut_off_at_max_tokens_is_retried():
+    # The outer object is cut off. Its complete inner object is not the answer.
+    llm = _CutOffOnce({"draft": ['{"weights": {"a": 1}, "tree": {', '{"ok": true}']})
+    obj, usage = asyncio.run(llm.chat_json([], stage="draft"))
+    assert obj == {"ok": True} and usage["calls"] == 2
+
+
 class _Rejected(openai.BadRequestError):
     """A 400 without an HTTP response object (the SDK's HTTP library varies)."""
 
@@ -63,10 +79,18 @@ class _Completions:
         for name in ("temperature", "response_format"):
             if name in request:
                 raise _Rejected(f"Unsupported parameter: '{name}'")
-        message = type("M", (), {"content": '{"ok": 1}'})
-        choice = type("C", (), {"message": message, "finish_reason": "stop"})
-        usage = type("U", (), {"prompt_tokens": 7, "completion_tokens": 3})
-        return type("R", (), {"choices": [choice], "usage": usage})
+        return _stream(['{"ok"', ': 1}'])
+
+
+async def _stream(pieces):
+    """Chunks as the SDK streams them: content deltas, then usage alone."""
+    for i, piece in enumerate(pieces, 1):
+        delta = type("D", (), {"content": piece})
+        choice = type("C", (), {"delta": delta,
+                                "finish_reason": "stop" if i == len(pieces) else None})
+        yield type("Chunk", (), {"choices": [choice], "usage": None})
+    usage = type("U", (), {"prompt_tokens": 7, "completion_tokens": 3})
+    yield type("Chunk", (), {"choices": [], "usage": usage})
 
 
 def test_rejected_parameters_are_dropped_for_the_rest_of_the_run():
@@ -76,6 +100,7 @@ def test_rejected_parameters_are_dropped_for_the_rest_of_the_run():
     obj, usage = asyncio.run(llm.chat_json([], stage="spec"))
     assert obj == {"ok": 1} and usage["prompt_tokens"] == 7
     assert len(completions.requests) == 3
+    assert completions.requests[-1]["stream"] is True
     asyncio.run(llm.chat_json([], stage="spec"))
     assert len(completions.requests) == 4     # no rejected parameter is sent again
     assert "temperature" not in completions.requests[-1]

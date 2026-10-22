@@ -28,7 +28,6 @@ logger = logging.getLogger(__name__)
 METHODS = ("full", "webdevjudge_baseline")
 MAX_REPAIRS = 2
 DRAFT_TEMPERATURE = 0.7
-FALLBACK_WEIGHTS = {"intention": 1, "content": 2, "static": 2, "dynamic": 2}
 BASELINE_WEIGHTS = {"intention": 1, "content": 0, "static": 3, "dynamic": 2}   # WebDevJudge
 
 
@@ -37,8 +36,8 @@ class Options:
     method: str = "full"
     as_of: str = field(default_factory=lambda: date.today().isoformat())
     drafts: int = 3
-    critic_rounds: int = 2
-    env_profile: str = "frontend_static"
+    critic_rounds: int = 1
+    env_profile: str = "either"
     force: bool = False
 
 
@@ -125,15 +124,16 @@ async def _run_full(c: _Case) -> dict:
         c.save(f"draft_{i}.json", draft)
 
     # Stage 4: merge, then the code steps.
-    trees = [d.get("tree", d) for d in drafts]
+    # Only the four branches go to the merge: never the draft's weights.
+    trees = [{b: t[b] for b in schema.BRANCHES if b in t}
+             for t in (d.get("tree", d) for d in drafts)]
     if len(trees) == 1:
         tree = trees[0]
     else:
         out = await c.call("merge", prompts.merge_messages(
             c.query, opts.as_of, opts.env_profile, spec, trees, universal))
         tree = out.get("tree", out)
-    weights = _mean_weights([d.get("branch_weight_proposal") for d in drafts]
-                            + [spec.get("branch_weight_proposal")])
+    weights = _mean_weights([d.get("branch_weight_proposal") for d in drafts])
     tree = _prepare(tree, universal)
     c.save("merged.json", {"branch_weights": weights, "tree": tree})
 
@@ -141,30 +141,28 @@ async def _run_full(c: _Case) -> dict:
     rounds = 0
     for r in range(1, opts.critic_rounds + 1):
         out = await c.call("critic", prompts.critic_messages(
-            c.query, opts.as_of, opts.env_profile, spec, weights, tree),
+            c.query, opts.as_of, opts.env_profile, spec, tree),
             model=c.llm.critic_model)
         issues = out.get("issues") if isinstance(out.get("issues"), list) else []
         c.save(f"critic_{r}.json", issues)
         rounds = r
-        if not any(isinstance(i, dict) and i.get("severity") == "blocking" for i in issues):
+        if not any(isinstance(i, dict) for i in issues):
             break
         out = await c.call("revise", prompts.revise_messages(
-            c.query, opts.as_of, opts.env_profile, spec, weights, tree, issues))
-        weights = _normalize_weights(out.get("branch_weights")) or weights
+            c.query, opts.as_of, opts.env_profile, spec, tree, issues))
         tree = _prepare(out.get("tree", out), universal)
-        c.save(f"revised_{r}.json", {"branch_weights": weights, "tree": tree})
+        c.save(f"revised_{r}.json", {"tree": tree})
 
     # Stage 6: validate ⇄ repair.
     def prepare(obj: dict) -> dict:
-        return {"branch_weights": _normalize_weights(obj.get("branch_weights")) or weights,
-                "tree": _prepare(obj.get("tree", obj), universal)}
+        return {"tree": _prepare(obj.get("tree", obj), universal)}
 
     def errors_of(obj: dict) -> list[str]:
-        return schema.validate(_record(c, spec, obj["branch_weights"], obj["tree"]))
+        return schema.validate(_record(c, spec, weights, obj["tree"]))
 
-    obj = await _until_valid(c, {"branch_weights": weights, "tree": tree}, kind="tree",
+    obj = await _until_valid(c, {"tree": tree}, kind="tree",
                              errors_of=errors_of, prepare=prepare, spec=spec)
-    return _finish(c, spec, obj["branch_weights"], _strip_support(obj["tree"]), {
+    return _finish(c, spec, weights, _strip_support(obj["tree"]), {
         "models": _models(c.llm, opts), "n_drafts": len(drafts), "critic_rounds": rounds})
 
 
@@ -250,14 +248,16 @@ def _normalize_weights(weights) -> dict | None:
 
 
 def _mean_weights(proposals: list) -> dict:
-    """Mean of the valid proposals, each scaled to sum 1 first (RACE)."""
+    """Mean of the valid draft proposals, each scaled to sum 1 first (RACE).
+    Equal weights if no proposal is valid."""
     valid = [w for p in proposals if (w := _normalize_weights(p))]
     if not valid:
-        valid = [_normalize_weights(FALLBACK_WEIGHTS)]
+        return {b: 1 / len(schema.BRANCHES) for b in schema.BRANCHES}
     return {b: sum(w[b] for w in valid) / len(valid) for b in schema.BRANCHES}
 
 
-def _record(c: _Case, spec: dict | None, weights: dict, tree: dict, meta: dict | None = None) -> dict:
+def _record(c: _Case, spec: dict | None, weights: dict, tree: dict,
+            meta: dict | None = None) -> dict:
     return {"id": c.id, "prompt": c.query, "as_of": c.opts.as_of, "method": c.opts.method,
             "spec": spec, "branch_weights": weights, "tree": tree, "meta": meta or {}}
 

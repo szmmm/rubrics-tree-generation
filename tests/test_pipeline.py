@@ -8,7 +8,7 @@ from rubric_tree import pipeline, schema
 from rubric_tree.export import to_webdevjudge
 
 NO_ISSUES = {"issues": []}
-BLOCKING = {"issues": [{"leaf_id": "S.2", "type": "subjective", "severity": "blocking",
+MINOR = {"issues": [{"leaf_id": "S.2", "type": "subjective", "severity": "minor",
                         "fix": "make it observable"}]}
 
 
@@ -59,36 +59,32 @@ def test_full_run_writes_all_artifacts(tmp_path):
     assert [json.loads(line) for line in (run_dir / "rubrics.jsonl").read_text().splitlines()] == [record]
     assert (run_dir / "failed.jsonl").read_text() == ""
     assert schema.validate(record) == []
-    assert _universal(record) == ["页面正常加载，无白屏或阻断使用的报错", "界面主要文字使用中文"]
+    assert _universal(record) == ["页面正常加载，无白屏或阻断使用的报错", "界面主要文字使用中文",
+                                  "界面视觉设计精致统一，看起来是经过设计的完整产品"]
     assert "support" in (case_dir / "merged.json").read_text()
     assert "support" not in json.dumps(record["tree"])
-    # mean of 3 equal draft proposals and the spec proposal (2, 1, 2, 3) / 8
-    assert record["branch_weights"]["dynamic"] == pytest.approx((3 * 0.25 + 3 / 8) / 4)
+    assert record["branch_weights"] == pytest.approx({b: 0.25 for b in schema.BRANCHES})
     assert record["meta"]["usage"]["calls"] == 6
     assert record["meta"]["critic_rounds"] == 1
-    assert record["meta"]["stats"]["leaves"] == 16
+    assert record["meta"]["stats"]["leaves"] == 17
     assert len((case_dir / "calls.jsonl").read_text().splitlines()) == 6
 
 
-def test_blocking_issue_triggers_revise_then_critic_again(tmp_path):
-    revised = {"branch_weights": {"intention": 1, "content": 1, "static": 1, "dynamic": 5},
-               "tree": tree()}
+def test_minor_issue_triggers_one_revise(tmp_path):
     llm = FakeLLM({"spec": [spec()], "draft": [draft()], "merge": [_merged()],
-                   "critic": [BLOCKING, NO_ISSUES], "revise": [revised]})
+                   "critic": [MINOR], "revise": [{"tree": tree()}]})
     result, run_dir = _run(llm, tmp_path)
 
     assert result["valid"] == 1
-    assert llm.stages()[-3:] == ["critic", "revise", "critic"]
+    assert llm.stages()[-2:] == ["critic", "revise"]
     case_dir = run_dir / "cases" / CASE["id"]
-    assert (case_dir / "revised_1.json").exists() and (case_dir / "critic_2.json").exists()
-    record = _final(run_dir)
-    assert record["meta"]["critic_rounds"] == 2
-    assert record["branch_weights"]["dynamic"] == pytest.approx(5 / 8)
+    assert (case_dir / "revised_1.json").exists() and not (case_dir / "critic_2.json").exists()
+    assert _final(run_dir)["meta"]["critic_rounds"] == 1
 
 
 def test_critic_rounds_are_capped(tmp_path):
     llm = FakeLLM({"spec": [spec()], "draft": [draft()], "merge": [_merged()],
-                   "critic": [BLOCKING], "revise": [{"tree": tree()}]})
+                   "critic": [MINOR], "revise": [{"tree": tree()}]})
     result, run_dir = _run(llm, tmp_path, critic_rounds=2)
     assert result["valid"] == 1
     assert llm.stages().count("critic") == 2 and llm.stages().count("revise") == 2
@@ -108,7 +104,7 @@ def test_resume_skips_finished_cases(tmp_path):
 
 def test_invalid_case_goes_to_failed_jsonl(tmp_path):
     small = tree()
-    small["static"]["children"] = small["static"]["children"][2:]   # 11 + 2 universal
+    small["static"]["children"] = small["static"]["children"][2:]   # 11 + 3 universal
     llm = FakeLLM({"spec": [spec()], "draft": [draft()], "merge": [{"tree": small}],
                    "critic": [NO_ISSUES], "repair_tree": [{"tree": small}]})
     result, run_dir = _run(llm, tmp_path)
@@ -118,19 +114,19 @@ def test_invalid_case_goes_to_failed_jsonl(tmp_path):
     assert (run_dir / "rubrics.jsonl").read_text() == ""
     failed = [json.loads(line) for line in (run_dir / "failed.jsonl").read_text().splitlines()]
     assert failed[0]["id"] == CASE["id"]
-    assert any("tree has 13 leaves" in e for e in failed[0]["errors"])
+    assert any("tree has 14 leaves" in e for e in failed[0]["errors"])
 
 
 def test_repair_fixes_a_validation_error(tmp_path):
     bad = tree()
-    bad["static"]["children"][1]["weight"] = 9
+    bad["static"]["children"][1]["critical"] = "yes"
     llm = FakeLLM({"spec": [spec()], "draft": [draft()], "merge": [{"tree": bad}],
                    "critic": [NO_ISSUES], "repair_tree": [{"tree": tree()}]})
     result, run_dir = _run(llm, tmp_path)
     assert result["valid"] == 1
     assert llm.stages().count("repair_tree") == 1
     repair_prompt = llm.calls[-1]["messages"][1]["content"]
-    assert "S.2: weight must be an integer 1-5; got 9" in repair_prompt
+    assert "S.2: critical must be true or false" in repair_prompt
 
 
 def test_spec_is_repaired_before_drafting(tmp_path):
@@ -175,7 +171,7 @@ def test_baseline_method(tmp_path):
     assert record["branch_weights"] == pytest.approx(
         {"intention": 1 / 6, "content": 0, "static": 0.5, "dynamic": 1 / 3})
     assert record["tree"]["dynamic"]["children"][1]["children"][0] == {
-        "id": "D.C.1", "description": "刷新后仍在", "weight": 1, "critical": False,
+        "id": "D.C.1", "description": "刷新后仍在", "critical": False,
         "origin": "explicit", "covers": [], "verify_by": "interaction", "children": None}
     assert to_webdevjudge(record)["rubric_tree"] == wdj
 

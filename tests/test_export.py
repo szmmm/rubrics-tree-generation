@@ -24,8 +24,8 @@ def test_baseline_prompt_example_is_a_valid_webdevjudge_tree():
 def test_markdown_shows_ids_tags_and_spec():
     text = export.to_markdown([record()])
     assert "## case-x · full" in text
-    assert "`D.C.1` [w5 · **critical** · implicit R4 · interaction] 刷新后记录仍在" in text
-    assert "- R4 (implicit, 4) 记录长期保存 — because: 每天都要用" in text
+    assert "`D.C.1` [**critical** · implicit R4 · interaction] 刷新后记录仍在" in text
+    assert "- R4 (implicit, critical) 记录长期保存 — because: 每天都要用" in text
 
 
 def test_cli_stats_and_export(tmp_path, capsys):
@@ -34,7 +34,7 @@ def test_cli_stats_and_export(tmp_path, capsys):
 
     assert main(["stats", str(rubrics)]) == 0
     table = capsys.readouterr().out
-    assert "| case-x | full | 16 | 3 | 2 | 6 | 5 |" in table
+    assert "| case-x | full | 17 | 3 | 2 | 7 | 5 |" in table
 
     out = tmp_path / "wdj.jsonl"
     assert main(["export", str(rubrics), "--format", "webdevjudge", "--out", str(out)]) == 0

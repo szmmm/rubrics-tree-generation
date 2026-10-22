@@ -11,14 +11,14 @@ def test_valid_record_passes():
 def test_worked_example_passes_the_validator():
     tree = pipeline._prepare(prompts.EXAMPLE_TREE, archetypes.universal_leaves(prompts.EXAMPLE_SPEC))
     rec = {"prompt": prompts.EXAMPLE_QUERY, "spec": prompts.EXAMPLE_SPEC, "tree": tree,
-           "branch_weights": pipeline._normalize_weights(prompts.EXAMPLE_SPEC["branch_weight_proposal"])}
+           "branch_weights": pipeline._normalize_weights(prompts.EXAMPLE_DRAFT["branch_weight_proposal"])}
     assert schema.validate(rec) == []
 
 
 def test_assign_ids_uses_path_form():
     ids = [n["id"] for b in schema.BRANCHES for n, _ in schema.iter_nodes(record()["tree"][b])]
     assert ids == ["I", "I.1", "I.2", "I.3", "C", "C.1", "C.2",
-                   "S", "S.1", "S.1.1", "S.1.2", "S.2", "S.3", "S.4", "S.5",
+                   "S", "S.1", "S.1.1", "S.1.2", "S.2", "S.3", "S.4", "S.5", "S.6",
                    "D", "D.B", "D.B.1", "D.B.2", "D.B.3", "D.C", "D.C.1", "D.C.2"]
 
 
@@ -29,7 +29,7 @@ def test_normalize_tree():
         "content": {"description": "c", "children": []},
     })
     child = tree["intention"]["children"][0]
-    assert list(child) == ["description", "weight", "critical", "covers", "children"]
+    assert list(child) == ["description", "critical", "covers", "children"]
     assert child["children"] is None and child["critical"] is False
     assert tree["content"]["children"] == []     # an empty branch root stays a group
 
@@ -37,7 +37,7 @@ def test_normalize_tree():
 def _deepen(rec):
     n = leaf("五层深的检查")
     for _ in range(4):
-        n = {"description": "分组", "weight": 3, "critical": False, "children": [n]}
+        n = {"description": "分组", "critical": False, "children": [n]}
     rec["tree"]["static"]["children"].append(n)
 
 
@@ -52,7 +52,7 @@ def _many_critical(rec):
 
 def _extra_requirement(rec):
     rec["spec"]["requirements"].append(
-        {"id": "R5", "type": "implicit", "text": "x", "rationale": "y", "importance": 4})
+        {"id": "R5", "type": "implicit", "text": "x", "rationale": "y", "critical": False})
 
 
 def _too_many_leaves(rec):
@@ -62,8 +62,6 @@ def _too_many_leaves(rec):
 # (name, mutation, part of the expected error) — one failing fixture per rule.
 CASES = [
     ("missing branch", _drop_branch, "tree must have exactly the branches"),
-    ("weight range", lambda r: node(r, "S.2").update(weight=7), "S.2: weight must be an integer 1-5"),
-    ("weight type", lambda r: node(r, "S.2").update(weight=True), "S.2: weight must be"),
     ("critical type", lambda r: node(r, "S.2").update(critical="yes"), "S.2: critical must be"),
     ("empty description", lambda r: node(r, "S.2").update(description=" "), "S.2: description"),
     ("children type", lambda r: node(r, "S.1").update(children="x"), "S.1: children must be"),
@@ -75,10 +73,15 @@ CASES = [
      "dynamic must have exactly two groups"),
     ("content empty", lambda r: r["tree"]["content"].update(children=[]),
      "content is empty, but spec.knowledge_needs is not"),
-    ("too few leaves", lambda r: r["tree"]["static"]["children"].pop(0), "tree has 14 leaves"),
-    ("too many leaves", _too_many_leaves, "tree has 46 leaves"),
+    ("too few leaves", lambda r: [r["tree"]["static"]["children"].pop(0) for _ in range(2)],
+     "tree has 14 leaves"),
+    ("too many leaves", _too_many_leaves, "tree has 47 leaves"),
+    ("weights sum", lambda r: r["branch_weights"].update(intention=0.5), "must sum to 1"),
+    ("critical leaf without critical requirement", lambda r: node(r, "S.2").update(critical=True),
+     "S.2: a critical leaf must cover a critical requirement"),
+    ("critical group", lambda r: node(r, "S.1").update(critical=True), "S.1: a group must not be critical"),
     ("too deep", _deepen, "leaf is 5 levels below the branch root"),
-    ("requirement not covered", _extra_requirement, "R5 (importance 4) is not covered"),
+    ("requirement not covered", _extra_requirement, "R5 is not covered"),
     ("unknown covers id", lambda r: node(r, "S.2").update(covers=["R9"]), "unknown requirement 'R9'"),
     ("covers type", lambda r: node(r, "S.2").update(covers="R2"), "S.2: covers must be a list"),
     ("explicit leaf without covers", lambda r: node(r, "S.2").update(covers=[]),
@@ -96,9 +99,6 @@ CASES = [
     ("duplicate description", lambda r: node(r, "S.2").update(description="能记录 喝水！"),
      "S.2: same description as I.1"),
     ("duplicate id", lambda r: node(r, "S.2").update(id="S.3"), "id 'S.3' is not unique"),
-    ("archetype weight", lambda r: node(r, "S.3").update(weight=5), "S.3: an archetype leaf must"),
-    ("weights sum", lambda r: r["branch_weights"].update(intention=0.5), "must sum to 1"),
-    ("weights keys", lambda r: r["branch_weights"].pop("content"), "branch_weights must map"),
 ]
 
 
@@ -117,12 +117,11 @@ SPEC_CASES = [
     ("design_focus", lambda s: s.update(design_focus="no"), "spec.design_focus"),
     ("requirements", lambda s: s.update(requirements=[]), "spec.requirements must be a non-empty"),
     ("requirement id", lambda s: s["requirements"][1].update(id="R1"), "id must be a unique"),
-    ("importance", lambda s: s["requirements"][0].update(importance=9), "importance must be"),
+    ("requirement critical", lambda s: s["requirements"][0].update(critical=5), "critical must be"),
     ("type", lambda s: s["requirements"][0].update(type="stated"), "type must be explicit"),
     ("rationale", lambda s: s["requirements"][3].pop("rationale"), "needs a rationale"),
-    ("knowledge need", lambda s: s["knowledge_needs"][0].update(freshness="old"),
+    ("knowledge need", lambda s: s["knowledge_needs"][0].update(generator_confident="yes"),
      "spec.knowledge_needs[0] needs"),
-    ("ambiguities", lambda s: s.update(ambiguities=None), "spec.ambiguities"),
 ]
 
 

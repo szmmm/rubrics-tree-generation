@@ -3,7 +3,10 @@
 Every attempt goes to the case's calls.jsonl: prompt, response, model,
 temperature, usage and latency. A response without a JSON object is retried
 up to PARSE_RETRIES times, with the temperature 0.1 higher each time
-(as WebDevJudge does).
+(as WebDevJudge does). A response cut off at MAX_TOKENS counts as one without
+a JSON object: a part of it can parse, but it is not the full answer.
+Responses are streamed, because a gateway can end a request that streams
+nothing (PAI-EAS: "stream timeout" after about 180 s).
 """
 from __future__ import annotations
 
@@ -16,8 +19,8 @@ from pathlib import Path
 from typing import Any
 
 PARSE_RETRIES = 3
-MAX_TOKENS = 16384
-REQUEST_TIMEOUT_S = 600
+MAX_TOKENS = 65536         # reasoning models spend most of it before the answer
+REQUEST_TIMEOUT_S = 1800
 
 _THINK = re.compile(r"<think>.*?</think>", re.DOTALL)
 _FENCE = re.compile(r"```(?:json)?\s*\n(.*?)```", re.DOTALL)
@@ -95,10 +98,13 @@ class LLM:
             usage["prompt_tokens"] += call_usage.get("prompt_tokens", 0)
             usage["completion_tokens"] += call_usage.get("completion_tokens", 0)
             usage["calls"] += 1
-            try:
-                obj, error = extract_json(text), ""
-            except ValueError as e:
-                obj, error = None, str(e)
+            if call_usage.get("finish_reason") == "length":
+                obj, error = None, f"response cut off at max_tokens ({MAX_TOKENS})"
+            else:
+                try:
+                    obj, error = extract_json(text), ""
+                except ValueError as e:
+                    obj, error = None, str(e)
             if log_path is not None:
                 _append(log_path, {
                     "ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "stage": stage,
@@ -112,7 +118,7 @@ class LLM:
 
     async def _complete(self, messages: list[dict], *, model: str, temperature: float,
                         stage: str) -> tuple[str, dict]:
-        """One raw completion: (text, usage). Tests replace this method."""
+        """One raw completion, streamed: (text, usage). Tests replace this method."""
         import openai
 
         if self._client is None:
@@ -120,14 +126,15 @@ class LLM:
                 api_key=self._api_key, base_url=self._base_url or None,
                 timeout=REQUEST_TIMEOUT_S, max_retries=3)
         request: dict[str, Any] = {"model": model, "messages": messages,
-                                   "max_tokens": MAX_TOKENS}
+                                   "max_tokens": MAX_TOKENS, "stream": True,
+                                   "stream_options": {"include_usage": True}}
         if not self._no_temperature:
             request["temperature"] = temperature
         if not self._no_json_mode:
             request["response_format"] = {"type": "json_object"}
         while True:
             try:
-                response = await self._client.chat.completions.create(**request)
+                stream = await self._client.chat.completions.create(**request)
                 break
             except (openai.BadRequestError, openai.UnprocessableEntityError) as e:
                 text = str(e).lower()
@@ -140,11 +147,16 @@ class LLM:
                     request.pop("response_format")
                 else:
                     raise
-        usage = response.usage
-        return (response.choices[0].message.content or "",
+        parts, finish_reason, usage = [], None, None
+        async for chunk in stream:
+            if chunk.choices:
+                parts.append(chunk.choices[0].delta.content or "")
+                finish_reason = chunk.choices[0].finish_reason or finish_reason
+            usage = chunk.usage or usage
+        return ("".join(parts),
                 {"prompt_tokens": getattr(usage, "prompt_tokens", 0) or 0,
                  "completion_tokens": getattr(usage, "completion_tokens", 0) or 0,
-                 "finish_reason": response.choices[0].finish_reason})
+                 "finish_reason": finish_reason})
 
 
 def _append(path: Path, entry: dict) -> None:

@@ -21,7 +21,7 @@ def to_webdevjudge(record: dict) -> dict:
 
 def from_webdevjudge(wdj: dict) -> dict:
     """A WebDevJudge tree in our schema, for the baseline method: empty content,
-    every weight 1, nothing critical, every leaf explicit with no covers."""
+    nothing critical, every leaf explicit with no covers."""
     return {"intention": _convert(wdj["intention"], "intention", root=True),
             "content": {"description": "内容", "children": []},
             "static": _convert(wdj["static"], "static", root=True),
@@ -37,7 +37,7 @@ def _strip(node: dict) -> dict:
 def _convert(node: dict, branch: str, *, root: bool = False) -> dict:
     out = {"description": node["description"]}
     if not root:
-        out.update(weight=1, critical=False)
+        out.update(critical=False)
     if node["children"] is None:
         out.update(origin="explicit", covers=[],
                    verify_by="interaction" if branch == "dynamic" else "view")
@@ -60,16 +60,15 @@ def _record_markdown(record: dict) -> str:
         for req in spec["requirements"]:
             why = (f"“{req['evidence_quote']}”" if req["type"] == "explicit"
                    else f"because: {req['rationale']}")
-            lines.append(f"- {req['id']} ({req['type']}, {req['importance']}) "
+            lines.append(f"- {req['id']} ({req['type']}{', critical' if req['critical'] else ''}) "
                          f"{req['text']} — {why}")
         for need in spec["knowledge_needs"]:
             sure = "confident" if need["generator_confident"] else "NOT confident"
-            lines.append(f"- knowledge: {need['topic']} ({need['freshness']}, {sure})")
-        for amb in spec["ambiguities"]:
-            lines.append(f"- ambiguity: {amb}")
+            lines.append(f"- knowledge: {need['topic']} ({sure})")
         lines.append("")
-    weights = " · ".join(f"{b} {record['branch_weights'][b]:.2f}" for b in BRANCHES)
-    lines += [f"**Branch weights.** {weights}", ""]
+    if record.get("branch_weights"):
+        weights = " · ".join(f"{b} {record['branch_weights'][b]:.2f}" for b in BRANCHES)
+        lines += [f"**Branch weights.** {weights}", ""]
     for branch in BRANCHES:
         lines += _node_markdown(record["tree"][branch], 0)
     return "\n".join(lines)
@@ -80,15 +79,15 @@ def _node_markdown(node: dict, depth: int) -> list[str]:
     if depth == 0:
         head = f"- **{node['id']}** {node['description']}"
     elif is_leaf(node):
-        tags = [f"w{node['weight']}"] + (["**critical**"] if node["critical"] else [])
+        tags = ["**critical**"] if node["critical"] else []
         tags += [node["origin"] + (" " + ",".join(node["covers"]) if node["covers"] else ""),
                  node["verify_by"]]
         head = f"- `{node['id']}` [{' · '.join(tags)}] {node['description']}"
         if node.get("note"):
             head += f" — _{node['note']}_"
     else:
-        crit = " · **critical**" if node["critical"] else ""
-        head = f"- `{node['id']}` [w{node['weight']}{crit}] **{node['description']}**"
+        crit = " [**critical**]" if node["critical"] else ""
+        head = f"- `{node['id']}`{crit} **{node['description']}**"
     lines = [pad + head]
     for child in node["children"] or []:
         lines += _node_markdown(child, depth + 1)

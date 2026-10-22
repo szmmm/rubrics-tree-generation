@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import re
 
-from .archetypes import ARCHETYPE_IDS
+from .archetypes import ARCHETYPE_IDS, LANGUAGES
 
 BRANCHES = ("intention", "content", "static", "dynamic")
 BRANCH_IDS = {"intention": "I", "content": "C", "static": "S", "dynamic": "D"}
@@ -16,16 +16,14 @@ DYNAMIC_CHILD_IDS = ("D.B", "D.C")    # basic, then complex
 ORIGINS = ("explicit", "implicit", "archetype", "universal")
 VERIFY_BY = ("view", "interaction", "fact")
 DELIVERIES = ("mobile_app", "single_page", "unspecified")
-FRESHNESS = ("stable", "seasonal", "recent")
 
 MIN_LEAVES, MAX_LEAVES = 15, 40
 MAX_DEPTH = 4          # levels below a branch root
 MAX_CRITICAL = 5
-COVERAGE_IMPORTANCE = 3   # spec requirements at or above this need a leaf
 
 # Keys a node can carry, in the order they are written. "support" exists only
 # between the merge and the final record.
-_KEY_ORDER = ("id", "description", "weight", "critical", "origin", "covers",
+_KEY_ORDER = ("id", "description", "critical", "origin", "covers",
               "verify_by", "note", "support", "children")
 
 _WDJ_BRANCHES = ("intention", "static", "dynamic")
@@ -112,8 +110,8 @@ def validate_spec(spec, query: str) -> list[str]:
                       f"got {archetypes!r}")
     if spec.get("delivery") not in DELIVERIES:
         errors.append(f"spec.delivery must be one of {', '.join(DELIVERIES)}")
-    if not _text(spec.get("ui_language")):
-        errors.append("spec.ui_language must be a non-empty string")
+    if spec.get("ui_language") not in LANGUAGES:
+        errors.append(f"spec.ui_language must be one of {', '.join(LANGUAGES)}")
     if not isinstance(spec.get("design_focus"), bool):
         errors.append("spec.design_focus must be true or false")
 
@@ -133,8 +131,8 @@ def validate_spec(spec, query: str) -> list[str]:
         where = f"spec requirement {rid}"
         if not _text(req.get("text")):
             errors.append(f"{where}: text must be a non-empty string")
-        if not _int_in(req.get("importance"), 1, 5):
-            errors.append(f"{where}: importance must be an integer 1-5")
+        if not isinstance(req.get("critical"), bool):
+            errors.append(f"{where}: critical must be true or false")
         if req.get("type") == "explicit":
             quote = req.get("evidence_quote")
             if not _text(quote) or _squeeze(quote) not in _squeeze(query):
@@ -152,12 +150,9 @@ def validate_spec(spec, query: str) -> list[str]:
         needs = []
     for i, need in enumerate(needs):
         if not (isinstance(need, dict) and _text(need.get("topic"))
-                and need.get("freshness") in FRESHNESS
                 and isinstance(need.get("generator_confident"), bool)):
-            errors.append(f"spec.knowledge_needs[{i}] needs topic, freshness "
-                          f"({', '.join(FRESHNESS)}) and generator_confident (bool)")
-    if not isinstance(spec.get("ambiguities"), list):
-        errors.append("spec.ambiguities must be a list")
+            errors.append(f"spec.knowledge_needs[{i}] needs topic and "
+                          "generator_confident (bool)")
     return errors
 
 
@@ -216,11 +211,13 @@ def validate(record: dict) -> list[str]:
                 if rid not in known:
                     errors.append(f"{leaf.get('id')}: covers unknown requirement {rid!r}")
     for req in requirements:
-        importance = req.get("importance")
-        if (isinstance(importance, int) and importance >= COVERAGE_IMPORTANCE
-                and req.get("id") not in covered):
-            errors.append(f"spec requirement {req.get('id')} (importance {importance}) "
-                          "is not covered by any leaf")
+        if req.get("id") not in covered:
+            errors.append(f"spec requirement {req.get('id')} is not covered by any leaf")
+    critical_reqs = {r.get("id") for r in requirements if r.get("critical") is True}
+    for leaf in all_leaves:
+        if (leaf.get("critical") is True and leaf.get("origin") != "universal"
+                and not critical_reqs & set(leaf.get("covers") or [])):
+            errors.append(f"{leaf.get('id')}: a critical leaf must cover a critical requirement")
 
     errors += _check_branch_weights(record.get("branch_weights"))
     return errors
@@ -238,12 +235,12 @@ def _check_node(node, branch: str, depth: int, found: list) -> list[str]:
         if node.get("critical"):
             errors.append(f"{nid}: a branch root must not be critical")
     else:
-        if not _int_in(node.get("weight"), 1, 5):
-            errors.append(f"{nid}: weight must be an integer 1-5; got {node.get('weight')!r}")
         if not isinstance(node.get("critical"), bool):
             errors.append(f"{nid}: critical must be true or false")
 
     children = node.get("children")
+    if depth > 0 and children is not None and node.get("critical") is True:
+        errors.append(f"{nid}: a group must not be critical; only a leaf can be critical")
     if children is None:
         if depth == 0:
             return errors + [f"{nid}: a branch root must have a children list"]
@@ -276,8 +273,6 @@ def _check_leaf(leaf: dict, branch: str, depth: int) -> list[str]:
         errors.append(f"{nid}: an {origin} leaf must list the requirement ids it covers")
     if "note" in leaf and not isinstance(leaf["note"], str):
         errors.append(f"{nid}: note must be a string")
-    if origin == "archetype" and _int_in(leaf.get("weight"), 4, 5):
-        errors.append(f"{nid}: an archetype leaf must have weight <= 3")
     return errors
 
 

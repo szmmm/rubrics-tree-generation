@@ -24,9 +24,9 @@ def main(argv: list[str] | None = None) -> int:
                      help="date that relative dates in queries refer to (default: today)")
     gen.add_argument("--drafts", type=int, default=3,
                      help="number of drafts; ignored when RT_DRAFT_MODELS is set")
-    gen.add_argument("--critic-rounds", type=int, default=2)
+    gen.add_argument("--critic-rounds", type=int, default=1)
     gen.add_argument("--env-profile", choices=sorted(prompts.ENV_PROFILES),
-                     default="frontend_static")
+                     default="either")
     gen.add_argument("--ids", help="comma-separated case ids (default: all)")
     gen.add_argument("--concurrency", type=int, default=8, help="max parallel LLM requests")
     gen.add_argument("--force", action="store_true", help="regenerate finished cases")

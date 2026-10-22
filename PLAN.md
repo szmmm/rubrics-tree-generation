@@ -8,7 +8,7 @@ Date: 2026-10-09.
 Input: one web-app generation query (one line of `genwebapp_v50.jsonl`: `{"id", "prompt"}`).
 Output: one **rubric tree** for that query. A judge (LLM, agent or human) uses the tree to grade a generated app, or to compare two apps.
 
-The pipeline makes the tree. The judge is out of scope. The plan includes a small reference scorer only so that the tree semantics (weights, gates) are defined and testable.
+The pipeline makes the tree. The judge is out of scope. The plan includes a small reference scorer only so that the tree semantics (gates) are defined and testable.
 
 Success criteria for the pipeline:
 
@@ -35,7 +35,7 @@ The 26 queries are in Chinese. They are short and under-specified. They differ i
 
 Three properties of this data drive the design:
 
-- **Implicit requirements from personal context.** Examples: "高血糖父母" means low-sugar dishes with low glycemic index. "小孩两岁半" means child-friendly travel. "长期用" means persistence. The WebDevJudge prompt extracts only what the query states. We must also extract what it implies.
+- **Requirements that follow from personal context.** Examples: "高血糖父母" means low-sugar dishes with low glycemic index. "小孩两岁半" means child-friendly travel. "长期用" means persistence. The WebDevJudge prompt extracts only what the query states. We must also extract what it implies. (Since 2026-10-16 these count as explicit, with the quoted words as evidence; see §4.1.)
 - **Content quality is often the main value.** For a travel guide, correct and useful information matters more than buttons. WebDevJudge puts content under `static`, mixed with "element is present". We give content its own branch.
 - **Freshness and real-world facts.** "近期在映热门电影", "最近3年", "国庆节", "今年". The correct content depends on a date. The rubric generator may not know the facts. It must not write facts it is not sure of into leaves.
 
@@ -45,21 +45,21 @@ Three properties of this data drive the design:
 |---|---|---|---|
 | **WebDevJudge** (ICLR 2026, [arXiv 2510.18560](https://arxiv.org/abs/2510.18560), [code](https://github.com/lcy2723/WebDevJudge)) | Tencent AI Lab, HKUST, NTU | Query-grounded rubric tree with `intention` / `static` / `dynamic(basic, complex)`; binary atomic leaves; branch weights 1/3/2; the "functional equivalence" guideline; generated rubrics are "too specific or too broad" on vague queries; judge failure modes (literal reading, feasibility, position bias); pairwise > single grading | Base schema (§3); baseline method (§4.8); critic checks (§4.5) |
 | **MiniAppBench / MiniAppEval** (ICML 2026, [arXiv 2603.09652](https://arxiv.org/abs/2603.09652)) | Inclusion AI (Ant Group), SJTU, CMU | Same three dimensions on real assistant queries; expert-written **domain-specific guidelines** given to the generating LLM; the reference is "a flexible inspection guide rather than a rigid template"; removing the reference cuts judge recall from 85% to 46% | Archetype guidance (§4.2) |
-| **RubricsTree** ([arXiv 2606.18203](https://arxiv.org/abs/2606.18203)) | Google et al. | Fixed taxonomy of atomic Boolean rubrics plus a router that activates only the relevant ones per query | Archetype routing (§4.1, §4.2) |
-| **PaperBench** ([arXiv 2504.01848](https://arxiv.org/abs/2504.01848)) | OpenAI | Weighted tree; weight is importance **relative to siblings**; decompose until an expert can check a leaf quickly; parent score = weighted mean of children | Node weights; leaf size rule; scorer (§3, §5) |
+| **RubricsTree** ([arXiv 2606.18203](https://arxiv.org/abs/2606.18203)) | Google et al. | Taxonomy of atomic Boolean rubrics (the paper calls it evolving) plus a router that activates only the relevant ones per query | Archetype routing (§4.1, §4.2) |
+| **PaperBench** ([arXiv 2504.01848](https://arxiv.org/abs/2504.01848)) | OpenAI | Weighted tree; weight is importance **relative to siblings**; decompose until an expert can check a leaf quickly; parent score = weighted mean of children | Leaf size rule; scorer (§3, §5). Node weights removed 2026-10-20 |
 | **Mind2Web 2** ([arXiv 2506.21506](https://arxiv.org/abs/2506.21506)) | OSU | **Critical** nodes gate the parent ("gate-then-average"); non-critical nodes give partial credit | `critical` flag; scorer (§3, §5) |
-| **RCCA** ([arXiv 2608.27906](https://arxiv.org/abs/2608.27906)) | Inclusion AI (Ant Group) | Web-app rubrics split into **initial-state** vs **after-interaction**; importance levels; score ceiling when an essential rubric fails; format/source/runtime gates before rubric checks | `verify_by` field; universal leaves (§4.4) |
-| **Rubrics as Rewards (RaR)** ([arXiv 2507.17746](https://arxiv.org/abs/2507.17746)) | Scale AI | Desiderata: expert grounding, coverage, importance weights, **self-contained** items; Essential/Important/Optional/Pitfall; 7–20 items; pitfalls phrased positively; reference material improves rubrics; stronger generators make better rubrics | Leaf rules; weights; all leaves positive |
+| **RCCA** ([arXiv 2608.27906](https://arxiv.org/abs/2608.27906)) | Inclusion AI (Ant Group) | Web-app rubrics split into **initial-state** vs **after-interaction**; severity penalties by item level (reward = 0.2 + 0.8 × (1 − penalty)); format/source/runtime gates before rubric checks (reward 0 / 0 / 0.1). Paper title: "Design the Feedback, Not Just the Reward". The review of 2026-10-20 found no score ceiling | `verify_by` field; universal leaves (§4.4) |
+| **Rubrics as Rewards (RaR)** ([arXiv 2507.17746](https://arxiv.org/abs/2507.17746)) | Scale AI | Desiderata: expert grounding, coverage, importance weights, **self-contained** items; Essential/Important/Optional/Pitfall; 7–20 items; pitfalls phrased positively; reference material improves rubrics; stronger generators make better rubrics | Leaf rules; all leaves positive |
 | **OpenRubrics / CRG** ([arXiv 2510.07743](https://arxiv.org/abs/2510.07743)) | Emory et al. | Split **hard rules** (explicit) from **principles** (implicit); contrastive generation from good vs bad responses; keep rubrics that predict the human preference label | `origin` field (§3); Phase 3 contrastive stage |
 | **RLCF, "Checklists are better than reward models"** ([arXiv 2507.18624](https://arxiv.org/abs/2507.18624)) | CMU, Apple | Candidate-based checklists (from real failure modes) are more objective, atomic and complete than direct prompting; fixed **universal** items added to every checklist | Universal leaves (§4.4); Phase 3 |
-| **DeepResearch Bench / RACE** ([arXiv 2506.11763](https://arxiv.org/abs/2506.11763)) | USTC et al. | Fixed top-level dimensions, **task-adaptive dimension weights**, averaged over several LLM trials | Branch weights averaged over drafts (§4.3) |
+| **DeepResearch Bench / RACE** ([arXiv 2506.11763](https://arxiv.org/abs/2506.11763)) | USTC et al. | Fixed top-level dimensions, **task-adaptive dimension weights**, averaged over several LLM trials | Branch weights averaged over drafts (§4.4) |
 | **WebCoderBench** ([arXiv 2601.02430](https://arxiv.org/abs/2601.02430)) | PKU | Separate functional / visual / **content** alignment; checklists drafted by **3 different LLMs**, then merged | `content` branch; multi-draft merge (§4.3, §4.4) |
 | **ARGO** ([OpenAI alignment blog](https://alignment.openai.com/argo/)) | OpenAI | Frontend reward models over-weight layout and typography; one page with broken buttons was preferred for its layout | Critic check: function must outweigh looks (§4.5) |
 | **Agent-as-a-Judge / DevAI** ([arXiv 2410.10934](https://arxiv.org/abs/2410.10934)) | Meta, KAUST | Requirements vs softer preferences; dependencies between requirements | Considered; dependencies deferred (§10) |
 | **HealthBench** ([arXiv 2505.08775](https://arxiv.org/abs/2505.08775)) | OpenAI | Per-conversation rubrics; axis tags such as accuracy, completeness, context awareness | `content` sub-structure; implicit-context leaves |
 | **Interventional transfer** ([arXiv 2610.10809](https://arxiv.org/abs/2610.10809)) | — | Validate a rubric with perturbations: a rubric that catches defects may still fail to reward improvements; test both directions | Phase 2 perturbation test (§7) |
 
-Summary of the design position: keep the WebDevJudge tree as the base, because WebDevJudge and MiniAppBench both validated it against humans. Add four things the data needs: (1) a query-analysis stage for explicit and implicit requirements, (2) archetype guidance, (3) a content branch with freshness rules, (4) multi-draft merge plus a critic loop for coverage and over-specificity.
+Summary of the design position: keep the WebDevJudge tree as the base, because WebDevJudge and MiniAppBench both validated it against humans. Add four things the data needs: (1) a query-analysis stage for explicit and implicit requirements, (2) archetype guidance, (3) a content branch with fact-check rules, (4) multi-draft merge plus a critic loop for coverage and over-specificity.
 
 ## 3. Output schema
 
@@ -72,7 +72,7 @@ One JSON object per query. Output file: `rubrics.jsonl`, one line per case.
   "as_of": "2026-10-09",
   "method": "full",                       // "full" | "webdevjudge_baseline"
   "spec": { ... },                        // output of stage 1, see §4.1
-  "branch_weights": {"intention": 0.20, "content": 0.30, "static": 0.15, "dynamic": 0.35},  // sum = 1
+  "branch_weights": {"intention": 0.20, "content": 0.30, "static": 0.15, "dynamic": 0.35},  // sum = 1; mean of the draft proposals
   "tree": {
     "intention": Node,
     "content":   Node,
@@ -89,8 +89,7 @@ One JSON object per query. Output file: `rubrics.jsonl`, one line per case.
 |---|---|---|
 | `id` | str | Assigned by code, never by the LLM. Path form: `I`, `I.1`, `C.2.3`, `D.B.1`, `D.C.4`. |
 | `description` | str | Internal node: short group name. Leaf: one yes/no statement, in the query language (see §9 Q3). |
-| `weight` | int 1–5 | Importance relative to siblings (PaperBench). 5 = core, 3 = important, 1 = nice to have (RaR mapping). |
-| `critical` | bool | If true and this node fails, its parent scores 0 (Mind2Web 2). Default false. |
+| `critical` | bool | Leaves only. A hard boundary: if this leaf fails, the whole app scores 0 (decided 2026-10-20; Mind2Web 2 gates only the parent). Default false. |
 | `children` | list[Node] \| null | null for a leaf. |
 | Leaf only: `origin` | enum | `explicit` (stated in query) \| `implicit` (inferred from query context) \| `archetype` (default expectation for the app type) \| `universal` (fixed, added by code). |
 | Leaf only: `covers` | list[str] | Spec requirement ids (`R1`, `R2` …) that this leaf checks. Required for `explicit` and `implicit`. |
@@ -110,19 +109,19 @@ Size target: 15–40 leaves in total, depending on query complexity. Max depth 4
 ### Worked example (fragment, case-06)
 
 ```jsonc
-"content": {"id": "C", "description": "菜谱内容", "weight": 3, "critical": false, "children": [
+"content": {"id": "C", "description": "菜谱内容", "critical": false, "children": [
   {"id": "C.1", "description": "每道菜都适合高血糖人群：主料避免高糖、精制主食为主的做法，或给出替换建议",
-   "weight": 5, "critical": true, "origin": "implicit", "covers": ["R2"], "verify_by": "fact", "children": null},
-  {"id": "C.2", "description": "菜品使用普通菜市场或超市容易买到的食材", "weight": 3, "critical": false,
+   "critical": true, "origin": "implicit", "covers": ["R2"], "verify_by": "fact", "children": null},
+  {"id": "C.2", "description": "菜品使用普通菜市场或超市容易买到的食材", "critical": false,
    "origin": "explicit", "covers": ["R3"], "verify_by": "view", "children": null},
-  {"id": "C.3", "description": "每道菜有分步骤的做法说明", "weight": 4, "critical": false,
+  {"id": "C.3", "description": "每道菜有分步骤的做法说明", "critical": false,
    "origin": "explicit", "covers": ["R4"], "verify_by": "view", "children": null}
 ]},
 "dynamic": {"id": "D", "children": [
   {"id": "D.B", "description": "基础交互", "children": [
-    {"id": "D.B.1", "description": "用户可以浏览菜品并选中一道菜查看详情", "weight": 4, "origin": "explicit", "covers": ["R5"], "verify_by": "interaction", ...}]},
+    {"id": "D.B.1", "description": "用户可以浏览菜品并选中一道菜查看详情", "origin": "explicit", "covers": ["R5"], "verify_by": "interaction", ...}]},
   {"id": "D.C", "description": "复杂交互", "children": [
-    {"id": "D.C.1", "description": "用户把菜品加入家庭菜单后刷新页面，菜单仍然保留", "weight": 5, "critical": true,
+    {"id": "D.C.1", "description": "用户把菜品加入家庭菜单后刷新页面，菜单仍然保留", "critical": true,
      "origin": "implicit", "covers": ["R6"], "verify_by": "interaction",
      "note": "用户说要“长期当爸妈的家庭菜单”，需要持久化；localStorage 或后端都可以"}]}
 ]}
@@ -149,26 +148,26 @@ Output (JSON):
   "ui_language": "zh",
   "design_focus": false,                       // true only if the query asks for a look or mood (case-10 "竹林幽静氛围")
   "requirements": [
-    {"id": "R1", "type": "explicit", "text": "推荐书籍", "evidence_quote": "要能推荐书籍", "importance": 5},
-    {"id": "R2", "type": "implicit", "text": "推荐的书与教育孩子和管理相关", "rationale": "用户说想看启迪教育小孩、做好管理者的书", "importance": 5},
-    {"id": "R3", "type": "implicit", "text": "进度支持一年 24 本的目标", "rationale": "今年读完 24 本书", "importance": 4}
+    {"id": "R1", "type": "explicit", "text": "推荐书籍", "evidence_quote": "要能推荐书籍", "critical": true},
+    {"id": "R2", "type": "explicit", "text": "推荐的书与教育孩子和管理相关", "evidence_quote": "启迪我教育小孩的、以及做好管理者的书籍", "critical": true},
+    {"id": "R3", "type": "explicit", "text": "进度支持一年 24 本的目标", "evidence_quote": "今年读完 24 本书", "critical": false}
   ],
   "knowledge_needs": [                         // facts the app must show and a judge must check
-    {"topic": "国庆期间海南亲子景点与天气", "freshness": "seasonal" | "recent" | "stable", "generator_confident": false}
-  ],
-  "ambiguities": ["未说明是否需要多用户", "…"],
-  "branch_weight_proposal": {"intention": 2, "content": 3, "static": 1, "dynamic": 3},
-  "branch_weight_reason": "…"
+    {"topic": "国庆期间海南亲子景点与天气", "generator_confident": false}
+  ]
 }
 ```
 
 Rules in the prompt:
 
-- Explicit requirement = stated in the query. `evidence_quote` must be an exact substring of the query (code checks this).
-- Implicit requirement = a need that a reasonable user with this context would expect, with a `rationale` that cites the context. Do not add features the user did not hint at. (OpenRubrics "principles"; HealthBench "context awareness".)
-- Resolve relative dates against `as_of` ("今年" = 2026, "国庆节" = 2026-10-01 to 10-07, "最近3年" = 2023-10 to 2026-10).
+- The bar for every requirement, explicit or implicit: if the app does not meet it, the user's goal fails or the user is let down. A feature that is only nice to have is not a requirement.
+- Explicit requirement = stated in the query, or follows directly from words in the query. `evidence_quote` is those words and must be an exact substring of the query (code checks this).
+- Implicit requirement = a need that no words in the query state, but that this user needs in this context, with a `rationale` that cites the context. (OpenRubrics "principles"; HealthBench "context awareness".)
+- Make each requirement one need: no "or" lists, no "最好" or "ideally". `critical`: true if the user's goal fails without it, false if the user is only let down without it. This replaced a 1–5 `importance` score (decided 2026-10-20): two tiers, as for leaves. A critical leaf must cover a critical requirement.
+- Do not write requirements for the environment profile, or for what the universal leaves check (page loads, UI language, mobile width).
+- Write `text` and `rationale` in the language of the query.
+- Keep relative time words relative ("今天", "今年", "最近3年", "国庆节"): the judge resolves them on the evaluation date. Keep absolute dates from the query as they are. (`as_of` is only the generator's "today", for its own confidence in facts.)
 - Mark `generator_confident: false` for facts the model cannot state with confidence at `as_of`.
-- List ambiguities. Later stages must accept any reasonable reading of an ambiguity.
 
 ### 4.2 Stage 2: archetype guidance (code, no LLM)
 
@@ -182,7 +181,7 @@ Initial archetypes (from §1): `game`, `tracker`, `guide`, `showcase`, `news`, `
 - Statistics or a summary view reflect the records the user entered.
 - A plan that spans days or weeks shows "today" correctly and advances.
 
-Rule: archetype leaves get `origin: "archetype"` and `weight ≤ 3`, unless the query itself implies them (then they are `implicit` with a `covers` id).
+Rule: archetype leaves get `origin: "archetype"`, unless the query itself implies them (then they are `implicit` with a `covers` id).
 
 ### 4.3 Stage 3: K independent drafts (K LLM calls)
 
@@ -190,19 +189,19 @@ Each call gets: query, `as_of`, spec, archetype guidance, schema description, le
 
 Diversity: default K = 3 with temperature 0.7 on one model. If `RT_DRAFT_MODELS` lists several models, use one draft per model (WebCoderBench used three LLMs).
 
-Each draft returns the tree plus its own `branch_weight_proposal`. The LLM writes no ids; code assigns them.
+Each draft returns the tree plus its own `branch_weight_proposal` (importance 1–5 of each branch). The LLM writes no ids; code assigns them.
 
 Leaf-writing rules (shared by stages 3–5):
 
 1. **Atomic**: one checkable fact per leaf. No "和/并且" joining two checks.
-2. **Binary and observable**: a judge answers yes or no from the app. Turn taste into observable proxies. Bad: "页面很美观". Good: "正文文字与背景对比清晰，无重叠或被截断的文字".
+2. **Binary and observable**: a judge answers yes or no from the app. Observable defects (overlapping or cut-off text, low contrast) are normal leaves. When design_focus is false, code adds one universal leaf for overall visual quality: do not write your own generic look leaf (Bad: "页面很美观"). When design_focus is true, write yes/no leaves for the look the user asked for, each with a note that tells the judge what to look at. Example: "页面整体呈现复古像素游戏风格", note "看字体、图标和边框是否为像素风格".
 3. **Self-contained** (RaR): the leaf makes sense without reading the query.
 4. **Functional, not literal** (WebDevJudge failure mode): describe the user-visible effect, not a label, layout, element type or library — unless the user named it. Bad: "有一个名为'今日任务'的卡片". Good: "打开应用即可看到当天要做的学习任务".
 5. **Feasible** in the environment profile. Example for a frontend-only profile: do not require live flight prices; require prices labeled as estimates with a date or source.
-6. **No uncertain facts in the leaf.** If `generator_confident` is false, write a `verify_by: "fact"` leaf that states what the judge must check. Bad: "列出电影《X》". Good: "列出的电影在 2026 年 10 月前后确实在中国大陆院线上映".
+6. **Correct facts, but no uncertain facts in the leaf.** When the app must show facts (the spec has `knowledge_needs`), write `verify_by: "fact"` leaves that check that the facts the user's goal depends on are correct (for example rules, prices, dates, names). If `generator_confident` is false, write a `verify_by: "fact"` leaf that states what the judge must check. Bad: "列出电影《X》". Good: "列出的电影在评测时确实在中国大陆院线近期上映".
 7. **Positive polarity**: pass = good. Write pitfalls as positive leaves (RaR). Example: "预算各项之和与总预算一致".
 8. **No double counting**: two leaves must not check the same thing.
-9. **Gate sparingly**: `critical: true` only for a leaf whose failure makes the app useless for the user's main goal. At most 5 per tree. Never on a branch root.
+9. **Gate sparingly**: a failed critical leaf sets the whole score to 0. Use `critical: true` only for a leaf whose failure makes the app useless for the user's main goal. A critical leaf must cover at least one critical requirement. At most 5 per tree. Never on a branch root.
 
 ### 4.4 Stage 4: merge (one LLM call + code)
 
@@ -210,13 +209,14 @@ LLM input: spec and the K drafts. LLM task: produce one tree that keeps every di
 
 Code after the merge:
 
-- Branch weights: mean of the K `branch_weight_proposal` vectors plus the spec proposal, then normalize to sum 1 (RACE). If any is missing, use the fallback `intention 1, content 2, static 2, dynamic 2`.
+- Branch weights: mean of the K draft `branch_weight_proposal` vectors, each scaled to sum 1 first (RACE). Equal weights if no proposal is valid. The spec, merge, critic and revise stages do not see or change them, so they stay the drafts' own judgment. They are kept so that a later judge can compare weighted and masked scores on the same trees (decided 2026-10-20).
 - Append the **universal leaves** (RLCF universal items; RCCA runtime gate). They come from `archetypes.py`, not from the LLM. Proposed set:
   - `static`: "页面正常加载，无白屏或阻断使用的报错" (critical), "界面主要文字使用与用户一致的语言".
   - `static`, only if `delivery == "mobile_app"`: "在手机宽度（约 390px）下布局可用，无横向溢出".
+  - `static`, only if `design_focus` is false: "界面视觉设计精致统一，看起来是经过设计的完整产品" (note: "看配色、字体、间距是否统一，信息层次是否清楚。只是没有错乱或重叠不算通过。"). When `design_focus` is true, the query's own style leaves replace it. The bar is high on purpose: the hygiene leaves already set the minimum, and a pairwise judge gets signal only when one app passes and the other fails.
 - Assign ids.
 
-### 4.5 Stage 5: critic ⇄ revise (≤ 2 rounds, 2 LLM calls per round)
+### 4.5 Stage 5: critic ⇄ revise (1 round by default, 2 LLM calls per round)
 
 Critic input: query, spec, current tree with ids and `support`. Critic output: a list of issues. Each issue has `leaf_id` (or `null` for a missing leaf), `type`, `severity` (`blocking` | `minor`), `fix` (text).
 
@@ -226,33 +226,34 @@ Issue types, each tied to a source:
 |---|---|---|
 | `missing` | An explicit or implicit requirement has no adequate leaf, or a core flow is not tested end to end | coverage; RaR |
 | `not_atomic` | Leaf checks two things | RLCF; PaperBench |
-| `subjective` | Leaf needs taste to judge | RaR "objective" |
+| `subjective` | A look leaf without a note that tells the judge what to look at, or a generic look leaf that repeats the universal one | RaR "objective" |
 | `over_specific` | Leaf demands one implementation where others serve the user equally | WebDevJudge §4.3 |
 | `too_broad` | Leaf is too vague to fail | WebDevJudge App. B.2 |
 | `ungrounded` | Leaf demands a feature with no basis in query or archetype (gold-plating); low `support` is a hint | WebDevJudge App. B.2 |
 | `infeasible` | Leaf cannot pass in the environment profile | WebDevJudge feasibility |
 | `hardcoded_fact` | Leaf states an uncertain fact as the expected answer | §4.3 rule 6 |
 | `duplicate` | Two leaves check the same thing | double counting |
-| `weight` | Weights disagree with importance; looks outweigh function when `design_focus` is false; too many `critical` | ARGO; WebDevJudge guideline 2 |
+| `balance` | A `critical` flag is wrong (the app is still useful when the leaf fails, or the core flow has no critical leaf); too many `critical`; look leaves outnumber function leaves when `design_focus` is false | ARGO; WebDevJudge guideline 2 |
 | `wrong_branch` | Leaf in the wrong branch, or `verify_by` is wrong | schema |
 
-If there are no `blocking` issues, stop. Otherwise the reviser gets the tree and the issue list and returns the full revised tree. Code re-assigns ids and runs the critic again (max 2 rounds). Save every round's issues to the case directory; they are useful research data.
+If there are no issues, stop. Otherwise the reviser gets the tree and the issue list and returns the full revised tree; minor issues also cause a revise (decided 2026-10-20: in v1 the critic found only minor issues, so no tree changed). The reviser applies every blocking issue and each minor issue whose fix is clear. Code re-assigns ids. By default there is 1 round, so the critic does not run again; `--critic-rounds N` runs the critic again until it finds no issues, for at most N rounds. Save every round's issues to the case directory; they are useful research data.
 
 ### 4.6 Stage 6: deterministic validation ⇄ repair
 
 `schema.validate(record) -> list[str]` returns human-readable errors. Checks:
 
-- JSON shape matches §3; all required fields; types; `weight` in 1–5.
+- JSON shape matches §3; all required fields; types.
 - Four branches present; `dynamic` has exactly two children, basic then complex.
 - `content` is empty only if `spec.knowledge_needs` is empty and no requirement mentions content.
 - Leaf count 15–40; depth ≤ 4 below each branch root; every internal node has ≥ 1 child.
-- Every spec requirement with `importance ≥ 3` is in the `covers` of at least one leaf.
+- Every spec requirement is in the `covers` of at least one leaf.
 - Every `covers` id exists in the spec. `explicit`/`implicit` leaves have non-empty `covers`.
 - Every spec `evidence_quote` is a substring of the query.
 - Leaves under `dynamic` have `verify_by == "interaction"`.
-- `critical` count ≤ 5; no branch root is critical.
-- No two leaves have the same normalized description (strip spaces and punctuation).
+- `critical` count ≤ 5; only leaves are critical; a critical leaf (except a universal one) covers at least one critical requirement.
+- `spec.ui_language` is "zh" or "en".
 - `branch_weights` sum to 1 ± 1e-6.
+- No two leaves have the same normalized description (strip spaces and punctuation).
 
 On errors, call the LLM once with the tree and the error list ("fix only these errors"). Max 2 repair attempts. If still invalid, write the case to `failed.jsonl` with the errors and continue with the next case.
 
@@ -275,7 +276,7 @@ A case with `final.json` is skipped on rerun unless `--force`. `rubrics.jsonl` i
 
 ### 4.8 Baseline method: `--method webdevjudge_baseline`
 
-One LLM call per query, with a prompt that follows the WebDevJudge Appendix B.2 structure (three branches, basic/complex, binary leaves, one example). Output converted to our schema: `content` empty, all `weight = 1`, `critical = false`, `origin = "explicit"`, `covers = []`, branch weights 1/3/2 normalized (without content). Validation for the baseline uses the WebDevJudge structural check only.
+One LLM call per query, with a prompt that follows the WebDevJudge Appendix B.2 structure (three branches, basic/complex, binary leaves, one example). Output converted to our schema: `content` empty, `critical = false`, `origin = "explicit"`, `covers = []`, branch weights 1/3/2 (WebDevJudge), normalized, content 0. Validation for the baseline uses the WebDevJudge structural check only.
 
 Purpose: the comparison point for Phase 2. Note: the WebDevJudge repo has no license file. Write our own prompt that follows the published structure; do not copy their file into this repo.
 
@@ -284,11 +285,16 @@ Purpose: the comparison point for Phase 2. Note: the WebDevJudge repo has no lic
 Single-answer mode only. Input: tree and a map `leaf_id → bool`.
 
 - Leaf score = 1 if pass, else 0.
-- Internal node score = 0 if any `critical` child scores 0; else Σ(weight·score) / Σ(weight) over children.
-- Root score = Σ over branches of `branch_weights[b] · score(b)`; a branch with no leaves is skipped and the weights re-normalized.
+- Branch score = the raw pass rate of its leaves, as in WebDevJudge. Groups do not change the score.
+- Root score = the mean of the branches, weighted by `branch_weights` when the record has them; a branch with no leaves is skipped and the weights re-normalized. Remove `branch_weights` to mask them.
+- Root score = 0 if any `critical` leaf fails. Critical leaves are hard boundaries.
+- There are no node weights, only two tiers: critical and non-critical (decided 2026-10-20). Inside a branch, the tree structure and the number of leaves set the relative importance.
+- How the judge combines the leaf results is not fixed by the generator. Only rules that change what the generator writes (for example the meaning of `critical`) are fixed here.
 - Also return per-branch scores and the list of failed critical leaves.
 
-Pairwise scoring and the judge prompts are not in scope. A pairwise judge can use per-leaf A/B/tie with the same weights (WebDevJudge style).
+Pairwise scoring and the judge prompts are not in scope. A pairwise judge can use per-leaf A/B/tie (WebDevJudge style).
+
+Nice-to-have features get no leaves. The tree checks only requirements that pass the bar (§4.1) and the archetype defaults. The pairwise judge finds extra features by comparing the two apps, and prefers the app whose extras serve the user better (decided 2026-10-20). The judge must not reward an extra that goes against a stated wish (for example more features on a page the user asked to keep "轻量").
 
 ## 6. Code layout
 
@@ -310,7 +316,7 @@ rubrics-tree-generation/
     pipeline.py             # one function per stage; run_case(); run_all() with asyncio semaphore (default 8)
     score.py                # §5
     export.py               # to_webdevjudge(record); to_markdown(records) for manual review
-    stats.py                # leaves per branch, depth, origin mix, verify_by mix, critical count, weights
+    stats.py                # leaves per branch, depth, origin mix, verify_by mix, critical count
   tests/
     fakes.py                # FakeLLM: returns canned JSON per stage, can inject bad JSON
     test_schema.py  test_pipeline.py  test_score.py  test_export.py
@@ -320,8 +326,8 @@ CLI:
 
 ```bash
 python -m rubric_tree generate --input genwebapp_v50.jsonl --run-name v1 \
-    [--method full|webdevjudge_baseline] [--as-of 2026-10-09] [--drafts 3] [--critic-rounds 2] \
-    [--env-profile frontend_static] [--ids case-06,case-13] [--concurrency 8] [--force]
+    [--method full|webdevjudge_baseline] [--as-of 2026-10-09] [--drafts 3] [--critic-rounds 1] \
+    [--env-profile either] [--ids case-06,case-13] [--concurrency 8] [--force]
 python -m rubric_tree stats   runs/v1/rubrics.jsonl
 python -m rubric_tree export  runs/v1/rubrics.jsonl --format markdown|webdevjudge --out <path>
 ```
@@ -364,13 +370,13 @@ The prompts are the most important part. The implementer must write them in `pro
 | Leaves demand one implementation | Rule 4; critic `over_specific`; `note` field for accepted alternatives |
 | Wrong facts in leaves | Rule 6; `generator_confident`; `verify_by: fact` |
 | One model's blind spots in all drafts | Option for several draft models; Phase 2 stability check |
-| Static/looks dominate the score | Branch weight bounds checked by the critic when `design_focus` is false (ARGO) |
+| Static/looks dominate the score | Critic `balance` check: look leaves must not outnumber function leaves when `design_focus` is false (ARGO) |
 | Gates make scores too harsh when a judge errs on one leaf | Max 5 critical leaves; never on branch roots; revisit in Phase 2 |
 
 ## 9. Open questions for the reviewer (defaults in bold)
 
-1. **Downstream use.** Is the tree for evaluation (single or pairwise judge), for RL reward, or both? Default: **evaluation, both modes**. RL use would need stricter atomicity and the Phase 3 contrastive filter.
-2. **Environment profile.** What can the generated app use? Default: **frontend only (HTML/CSS/JS, localStorage, public CDNs and public APIs, no backend)**. The `ddb-comparison-rating` criteria mention "real integration", so DeepDiver apps may have a backend. If yes, persistence and data leaves change.
+1. **Downstream use.** Is the tree for evaluation (single or pairwise judge), for RL reward, or both? Default: **evaluation, both modes**. RL use would need stricter atomicity and the Phase 3 contrastive filter. Answer (2026-10-20): **both evaluation and RL reward; the judge is mostly pairwise.**
+2. **Environment profile.** What can the generated app use? Answer (2026-10-20): it is not known, so the default profile is **`either`**: the app can be frontend only or full stack, a good app of either kind must be able to pass each leaf, and a leaf requires what only a backend can do only when the user's goal needs it. `frontend_static` and `fullstack` stay available. Earlier default: frontend only. The `ddb-comparison-rating` criteria mention "real integration", so DeepDiver apps may have a backend. If yes, persistence and data leaves change.
 3. **Rubric language.** Default: **leaf descriptions in Chinese** (the query language), field names in English. Alternative: English leaves for non-Chinese judges.
 4. **Models.** Which OpenAI-compatible endpoint and models can the pipeline use? Is a search tool available (Phase 3)? Default: **one strong reasoning model for all stages, no search**.
 5. **Branch set.** Accept the fourth branch `content`? Default: **yes**. `export --format webdevjudge` merges it into `static` for compatibility.

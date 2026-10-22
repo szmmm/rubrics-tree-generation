@@ -13,9 +13,9 @@ query ─▶ [1 spec] ─▶ [2 archetype guidance] ─▶ [3 K drafts] ─▶ [
 ```
 
 The tree has four branches: `intention`, `content`, `static`, `dynamic` (`dynamic` has the groups basic `D.B` and complex `D.C`).
-Each leaf is one yes/no check, with a weight (1–5, relative to its siblings), a `critical` flag, an `origin`, the spec requirements it `covers`, and a `verify_by` method.
-Code assigns all ids, adds the universal leaves, averages the branch weights and runs the validator.
-The reference scorer in `rubric_tree/score.py` defines what weights and gates mean.
+Each leaf is one yes/no check, with a `critical` flag, an `origin`, the spec requirements it `covers`, and a `verify_by` method.
+Code assigns all ids, adds the universal leaves, averages the drafts' branch weights and runs the validator.
+The reference scorer in `rubric_tree/score.py` defines what the gates mean. There are no node weights: a node is critical or not. Branch weights are kept, and the scorer ignores them when they are removed. A failed critical node sets the whole score to 0 (decided 2026-10-20).
 
 ## Setup
 
@@ -47,10 +47,10 @@ Options of `generate`:
 | Option | Default | Meaning |
 |---|---|---|
 | `--method` | `full` | `full` or `webdevjudge_baseline` (one call, WebDevJudge structure) |
-| `--as-of` | today | The date that "今年", "最近", "国庆节" refer to. Set it to the date when the apps were generated. |
+| `--as-of` | today | The generator's "today", for its confidence in facts. Relative words ("今年", "最近", "国庆节") stay relative in the leaves; the judge resolves them on the evaluation date. |
 | `--drafts` | 3 | Number of drafts (temperature 0.7). `RT_DRAFT_MODELS` replaces it with one draft per model. |
-| `--critic-rounds` | 2 | Maximum critic ⇄ revise rounds |
-| `--env-profile` | `frontend_static` | What the app can use: `frontend_static` or `fullstack`. Leaf feasibility depends on it. |
+| `--critic-rounds` | 1 | Maximum critic ⇄ revise rounds |
+| `--env-profile` | `either` | What the app can use: `either` (not known: frontend only or full stack), `frontend_static` or `fullstack`. Leaf feasibility depends on it. |
 | `--ids` | all | Comma-separated case ids |
 | `--concurrency` | 8 | Maximum parallel LLM requests |
 | `--force` | off | Generate finished cases again |
@@ -105,12 +105,10 @@ One test checks that the worked example in `prompts.py` passes the validator.
 - Stage 1 validates and repairs the spec before the drafts start. A tree repair cannot fix a bad spec.
 - The `evidence_quote` check ignores whitespace differences.
 - `content` can be empty only when `spec.knowledge_needs` is empty. ("No requirement mentions content" is not a check that code can do.)
-- The fallback branch weights are used only when no proposal is valid.
 - With `--drafts 1`, there is no merge call.
-- An additional environment profile, `fullstack`, is available.
+- Environment profiles `either` (default), `frontend_static` and `fullstack` are available.
 - The baseline prompt is our own text. Its example is the worked example, converted to the WebDevJudge format, because the WebDevJudge repository has no license.
 - The baseline also gets the repair loop, with the WebDevJudge structure check.
-- The validator also checks the §4.2 rule "archetype leaves have weight ≤ 3".
 
 ## Status
 

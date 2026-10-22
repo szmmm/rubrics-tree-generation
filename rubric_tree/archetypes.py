@@ -3,7 +3,7 @@
 The guidance is the simplest form of the MiniAppBench "domain-specific
 instructions" and the RubricsTree router: stage 1 picks 1-3 archetype ids, and
 the draft prompt gets the bullets of those archetypes. Leaves that come only
-from this guidance get origin "archetype" and weight <= 3.
+from this guidance get origin "archetype".
 
 The universal leaves are fixed checks that code adds to every tree (RLCF
 universal items; RCCA runtime gate). No LLM writes or changes them.
@@ -117,6 +117,7 @@ ARCHETYPES: dict[str, dict] = {
 ARCHETYPE_IDS = tuple(ARCHETYPES)
 
 _LANGUAGE_NAMES = {"zh": "中文", "en": "英文"}
+LANGUAGES = tuple(_LANGUAGE_NAMES)
 
 
 def guidance(archetype_ids: list[str]) -> str:
@@ -130,17 +131,25 @@ def guidance(archetype_ids: list[str]) -> str:
 
 def universal_leaves(spec: dict) -> list[dict]:
     """The fixed leaves that code adds to the static branch of every tree."""
-    language = _LANGUAGE_NAMES.get(spec.get("ui_language", ""), "与用户提问一致的语言")
+    language = _LANGUAGE_NAMES[spec["ui_language"]]
     leaves = [
-        _leaf("页面正常加载，无白屏或阻断使用的报错", weight=5, critical=True),
-        _leaf(f"界面主要文字使用{language}", weight=2),
+        _leaf("页面正常加载，无白屏或阻断使用的报错", critical=True),
+        _leaf(f"界面主要文字使用{language}"),
     ]
     if spec.get("delivery") == "mobile_app":
-        leaves.append(_leaf("在手机宽度（约 390px）下布局可用，无横向溢出", weight=3))
+        leaves.append(_leaf("在手机宽度（约 390px）下布局可用，无横向溢出"))
+    if not spec.get("design_focus"):
+        # When the query asks for a look, its own style leaves replace this one.
+        leaves.append(_leaf(
+            "界面视觉设计精致统一，看起来是经过设计的完整产品",
+            note="看配色、字体、间距是否统一，信息层次是否清楚。只是没有错乱或重叠不算通过。"))
     return leaves
 
 
-def _leaf(description: str, *, weight: int, critical: bool = False) -> dict:
-    return {"description": description, "weight": weight, "critical": critical,
-            "origin": "universal", "covers": [], "verify_by": "view",
-            "children": None}
+def _leaf(description: str, *, critical: bool = False, note: str = "") -> dict:
+    leaf = {"description": description, "critical": critical,
+            "origin": "universal", "covers": [], "verify_by": "view"}
+    if note:
+        leaf["note"] = note
+    leaf["children"] = None
+    return leaf
