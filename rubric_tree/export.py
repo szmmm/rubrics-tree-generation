@@ -55,8 +55,14 @@ def _record_markdown(record: dict) -> str:
     lines = [f"## {record['id']} · {record['method']}", "", f"> {record['prompt']}", ""]
     spec = record.get("spec")
     if spec:
+        frame = spec.get("time_frame") or {}
         lines += [f"**Spec.** archetypes: {', '.join(spec['archetypes'])} · "
-                  f"delivery: {spec['delivery']} · design_focus: {spec['design_focus']}", ""]
+                  f"delivery: {spec['delivery']} · design_focus: {spec['design_focus']} · "
+                  f"user's today: {frame.get('date', record.get('as_of'))}"
+                  + (f" · about: {frame['refers_to']}" if frame.get("refers_to") else ""), ""]
+        if frame.get("evidence_quote"):
+            lines.append(f"- time: not as_of {record.get('as_of')} — “{frame['evidence_quote']}”, "
+                         f"because: {frame.get('rationale')}")
         for req in spec["requirements"]:
             why = (f"“{req['evidence_quote']}”" if req["type"] == "explicit"
                    else f"because: {req['rationale']}")
@@ -66,9 +72,6 @@ def _record_markdown(record: dict) -> str:
             sure = "confident" if need["generator_confident"] else "NOT confident"
             lines.append(f"- knowledge: {need['topic']} ({sure})")
         lines.append("")
-    if record.get("branch_weights"):
-        weights = " · ".join(f"{b} {record['branch_weights'][b]:.2f}" for b in BRANCHES)
-        lines += [f"**Branch weights.** {weights}", ""]
     for branch in BRANCHES:
         lines += _node_markdown(record["tree"][branch], 0)
     return "\n".join(lines)

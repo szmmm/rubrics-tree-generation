@@ -1,6 +1,6 @@
 # rubrics-tree-generation
 
-Input: web-app generation queries, one JSON object per line (`{"id", "prompt"}`).
+Input: web-app generation queries, one JSON object per line (`{"id", "prompt"}`, and optionally `"as_of": "YYYY-MM-DD"`, the date the user wrote the query).
 Output: one rubric tree per query. A judge uses the tree to grade a generated app or to compare two apps.
 
 The design is in [PLAN.md](PLAN.md). This is the Phase 1 implementation.
@@ -14,8 +14,8 @@ query ─▶ [1 spec] ─▶ [2 archetype guidance] ─▶ [3 K drafts] ─▶ [
 
 The tree has four branches: `intention`, `content`, `static`, `dynamic` (`dynamic` has the groups basic `D.B` and complex `D.C`).
 Each leaf is one yes/no check, with a `critical` flag, an `origin`, the spec requirements it `covers`, and a `verify_by` method.
-Code assigns all ids, adds the universal leaves, averages the drafts' branch weights and runs the validator.
-The reference scorer in `rubric_tree/score.py` defines what the gates mean. There are no node weights: a node is critical or not. Branch weights are kept, and the scorer ignores them when they are removed. A failed critical node sets the whole score to 0 (decided 2026-10-20).
+Code assigns all ids, adds the universal leaves and runs the validator.
+The reference scorer in `rubric_tree/score.py` defines what the gates mean. There are no node or branch weights: a node is critical or not. A failed critical node sets the whole score to 0 (decided 2026-10-20). Else the score is the pass rate over all leaves; the branches only group the leaves (decided 2026-10-23).
 
 ## Setup
 
@@ -47,16 +47,24 @@ Options of `generate`:
 | Option | Default | Meaning |
 |---|---|---|
 | `--method` | `full` | `full` or `webdevjudge_baseline` (one call, WebDevJudge structure) |
-| `--as-of` | today | The generator's "today", for its confidence in facts. Relative words ("今年", "最近", "国庆节") stay relative in the leaves; the judge resolves them on the evaluation date. |
-| `--drafts` | 3 | Number of drafts (temperature 0.7). `RT_DRAFT_MODELS` replaces it with one draft per model. |
+| `--as-of` | today | The user's today for cases without an `as_of` field. The spec stage keeps it, unless the query's own words show another time (`spec.time_frame`). Calendar words ("今年", "明年", "国庆节") are resolved against that date into absolute dates; freshness words ("最近", "最新") stay relative, and the judge checks them on the evaluation date. |
+| `--drafts` | 3 | Number of drafts. `RT_DRAFT_MODELS` replaces it with one draft per model. |
 | `--critic-rounds` | 1 | Maximum critic ⇄ revise rounds |
 | `--env-profile` | `either` | What the app can use: `either` (not known: frontend only or full stack), `frontend_static` or `fullstack`. Leaf feasibility depends on it. |
 | `--ids` | all | Comma-separated case ids |
 | `--concurrency` | 8 | Maximum parallel LLM requests |
-| `--force` | off | Generate finished cases again |
+| `--force` | off | Generate every selected case again from an empty directory |
 
-A case with `final.json` is skipped on a rerun. Any other case starts again from an empty directory.
-Use a new `--run-name` when you change options.
+Every LLM call samples at temperature 1.0 and top_p 0.95, the sampling DeepSeek recommends for thinking. At temperature 0, DeepSeek-V4 often repeated the same lines in its thinking until the token cap (2026-10-24).
+Every LLM call asks for thinking at `high` effort (`reasoning_effort` plus `chat_template_kwargs.thinking`, which DeepSeek-V4 on SGLang needs). Set `RT_REASONING_EFFORT` to `low`, `max` or `off` to change it. A 100-query DSV4-Flash run at `max` effort (2026-10-24) hit the token cap in 16% of draft calls with no answer yet, and those calls took 39% of all tokens; `high` is the default for that reason.
+A call may produce at most 131072 tokens, reasoning included; set `RT_MAX_TOKENS` to change the cap. A response cut off at the cap counts as a failed attempt and is retried. Qwen3.8-27B runs with the old 65536 cap were cut off 4 times, so keep the server's `--context-length` above prompt plus cap (the DSV4 server on h20-2 has 384000).
+
+Every stage output is saved when the stage ends (each draft on its own), and a saved stage is not run again.
+A case that fails is retried in the same run, 2 more times, from its first missing stage. Only then does it go to `failed.json`.
+A case with `final.json` is skipped on a rerun. A failed or unfinished case (for example after a crash) continues from its first missing stage.
+A resumed case uses the saved stages as they are, so use a new `--run-name` when you change options, or `--force`.
+For a big input, run batches of a few hundred ids (`--ids`) into one `--run-name`; `rubrics.jsonl` then holds every batch so far.
+The `usage` in a record counts only the calls of the run that finished the case; `calls.jsonl` has all of them.
 
 ## Outputs
 
@@ -69,7 +77,7 @@ runs/<run_name>/
     spec.json  draft_1.json … draft_K.json  merged.json
     critic_1.json  revised_1.json  critic_2.json …
     final.json | failed.json
-    calls.jsonl          # every LLM attempt: prompt, response, model, temperature, usage, latency
+    calls.jsonl          # every LLM attempt: prompt, response, model, temperature, reasoning effort, usage, latency
 ```
 
 `rubrics.jsonl` and `failed.jsonl` are rebuilt from the case directories at the end of every run.
@@ -101,6 +109,9 @@ One test checks that the worked example in `prompts.py` passes the validator.
 ## Differences from PLAN.md
 
 - Records and nodes are plain dicts in the JSON shape, not dataclasses.
+- At most 5 critical leaves besides the universal leaves (decided 2026-10-24). In a 100-query run the critic asked for a 5th critical leaf of the LLM's own in about half of the trees, and the universal one made it 6. At the cap, the critic asks to swap a critical flag, not to add one.
+- A draft, merge, revise or tree repair that does not return the four branches is retried like a response without JSON. Revise once returned only the branch it changed (8 of 100 cases).
+- Every call samples at temperature 1.0 and top_p 0.95. PLAN's draft temperature 0.7 and the 0.1 rise per JSON retry are not used; a retry gets a new seed.
 - Code removes and adds the universal leaves again after every LLM rewrite (merge, revise, repair). Thus no LLM can change them.
 - Stage 1 validates and repairs the spec before the drafts start. A tree repair cannot fix a bad spec.
 - The `evidence_quote` check ignores whitespace differences.

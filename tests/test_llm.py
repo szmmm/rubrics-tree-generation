@@ -24,13 +24,24 @@ def test_extract_json_fails_without_an_object(text):
         extract_json(text)
 
 
+def test_an_object_that_fails_the_check_is_retried(tmp_path):
+    llm = FakeLLM({"merge": ['{"tree": {"description": "x"}}', '{"tree": {"ok": 1}}']})
+    log = tmp_path / "calls.jsonl"
+    obj, usage = asyncio.run(llm.chat_json(
+        [], stage="merge", log_path=log,
+        check=lambda o: "" if "ok" in o["tree"] else "wrong shape"))
+    assert obj == {"tree": {"ok": 1}} and usage["calls"] == 2
+    assert [json.loads(line)["parse_error"] for line in log.read_text().splitlines()] ==         ["wrong shape", ""]
+
+
 def test_bad_json_then_good_json_succeeds_after_retry(tmp_path):
     llm = FakeLLM({"spec": ["not json at all", '{"ok": true}']})
     log = tmp_path / "calls.jsonl"
     obj, usage = asyncio.run(llm.chat_json([{"role": "user", "content": "x"}], stage="spec",
-                                           temperature=0.0, log_path=log))
+                                           log_path=log))
     assert obj == {"ok": True}
-    assert [c["temperature"] for c in llm.calls] == [0.0, 0.1]
+    assert [c["temperature"] for c in llm.calls] == [1.0, 1.0]
+    assert llm.calls[0]["seed"] != llm.calls[1]["seed"]
     assert usage == {"prompt_tokens": 200, "completion_tokens": 20, "calls": 2}
     entries = [json.loads(line) for line in log.read_text().splitlines()]
     assert [e["parse_error"] != "" for e in entries] == [True, False]
@@ -48,9 +59,9 @@ def test_gives_up_after_the_parse_retries():
 class _CutOffOnce(FakeLLM):
     """The first response stops at max_tokens."""
 
-    async def _complete(self, messages, *, model, temperature, stage):
+    async def _complete(self, messages, *, model, temperature, seed, stage):
         text, usage = await super()._complete(messages, model=model, temperature=temperature,
-                                              stage=stage)
+                                              seed=seed, stage=stage)
         return text, {**usage, "finish_reason": "length" if len(self.calls) == 1 else "stop"}
 
 
@@ -104,4 +115,101 @@ def test_rejected_parameters_are_dropped_for_the_rest_of_the_run():
     asyncio.run(llm.chat_json([], stage="spec"))
     assert len(completions.requests) == 4     # no rejected parameter is sent again
     assert "temperature" not in completions.requests[-1]
+    assert "top_p" not in completions.requests[-1]
     assert "response_format" not in completions.requests[-1]
+
+
+class _Recorder:
+    """Accepts every request, or rejects the ones that carry `reject` once."""
+
+    def __init__(self, reject: str = ""):
+        self.requests, self.reject = [], reject
+
+    async def create(self, **request):
+        self.requests.append(dict(request))
+        if self.reject and self.reject in request:
+            raise _Rejected(f"Unsupported parameter: '{self.reject}'")
+        return _stream(['{"ok": 1}'])
+
+
+def _llm_with(completions, **kwargs):
+    llm = LLM(model="m", api_key="k", **kwargs)
+    llm._client = type("Client", (), {"chat": type("Chat", (), {"completions": completions})})
+    return llm
+
+
+def test_thinking_at_high_effort_is_the_default(tmp_path):
+    completions = _Recorder()
+    log = tmp_path / "calls.jsonl"
+    asyncio.run(_llm_with(completions).chat_json([], stage="spec", log_path=log))
+    request = completions.requests[-1]
+    assert request["reasoning_effort"] == "high"
+    assert request["extra_body"] == {"chat_template_kwargs": {"thinking": True}}
+    assert json.loads(log.read_text())["reasoning_effort"] == "high"
+
+
+def test_every_call_samples_at_temperature_1_and_top_p_095(tmp_path):
+    completions = _Recorder()
+    log = tmp_path / "calls.jsonl"
+    asyncio.run(_llm_with(completions).chat_json([], stage="spec", log_path=log))
+    request = completions.requests[-1]
+    assert (request["temperature"], request["top_p"]) == (1.0, 0.95)
+    entry = json.loads(log.read_text())
+    assert (entry["temperature"], entry["top_p"]) == (1.0, 0.95)
+
+
+@pytest.mark.parametrize("value, effort", [("", "high"), ("max", "max"), ("off", None)])
+def test_rt_reasoning_effort_sets_the_level(monkeypatch, value, effort):
+    monkeypatch.setenv("RT_MODEL", "m")
+    monkeypatch.setenv("RT_API_KEY", "k")
+    monkeypatch.setenv("RT_REASONING_EFFORT", value)
+    llm = LLM.from_env()
+    completions = _Recorder()
+    llm._client = type("Client", (), {"chat": type("Chat", (), {"completions": completions})})
+    asyncio.run(llm.chat_json([], stage="spec"))
+    assert completions.requests[-1].get("reasoning_effort") == effort
+    assert ("extra_body" in completions.requests[-1]) == (effort is not None)
+
+
+@pytest.mark.parametrize("value, max_tokens", [("", 131072), ("32768", 32768)])
+def test_rt_max_tokens_sets_the_cap(monkeypatch, value, max_tokens):
+    monkeypatch.setenv("RT_MODEL", "m")
+    monkeypatch.setenv("RT_API_KEY", "k")
+    monkeypatch.setenv("RT_MAX_TOKENS", value)
+    llm = LLM.from_env()
+    completions = _Recorder()
+    llm._client = type("Client", (), {"chat": type("Chat", (), {"completions": completions})})
+    asyncio.run(llm.chat_json([], stage="spec"))
+    assert completions.requests[-1]["max_tokens"] == max_tokens
+
+
+@pytest.mark.parametrize("value", ["lots", "0", "-5", "1.5"])
+def test_rt_max_tokens_must_be_a_positive_integer(monkeypatch, value):
+    monkeypatch.setenv("RT_MODEL", "m")
+    monkeypatch.setenv("RT_API_KEY", "k")
+    monkeypatch.setenv("RT_MAX_TOKENS", value)
+    with pytest.raises(SystemExit, match="RT_MAX_TOKENS"):
+        LLM.from_env()
+
+
+class _AlwaysCutOff(FakeLLM):
+    async def _complete(self, messages, *, model, temperature, seed, stage):
+        text, usage = await super()._complete(messages, model=model, temperature=temperature,
+                                              seed=seed, stage=stage)
+        return text, {**usage, "finish_reason": "length"}
+
+
+def test_the_cut_off_error_names_the_cap_in_use():
+    llm = _AlwaysCutOff({"draft": ['{"a": ']}, max_tokens=1000)
+    with pytest.raises(LLMError, match=r"max_tokens \(1000\)"):
+        asyncio.run(llm.chat_json([], stage="draft"))
+
+
+def test_a_rejected_reasoning_effort_turns_thinking_off_for_the_run():
+    completions = _Recorder(reject="reasoning_effort")
+    llm = _llm_with(completions)
+    asyncio.run(llm.chat_json([], stage="spec"))
+    asyncio.run(llm.chat_json([], stage="spec"))
+    assert len(completions.requests) == 3
+    assert "reasoning_effort" not in completions.requests[-1]
+    assert "extra_body" not in completions.requests[-1]

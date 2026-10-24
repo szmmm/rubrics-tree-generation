@@ -1,11 +1,10 @@
 import asyncio
 import json
 
-import pytest
-
 from fakes import CASE, FakeLLM, draft, leaf, spec, tree
 from rubric_tree import pipeline, schema
 from rubric_tree.export import to_webdevjudge
+from rubric_tree.llm import PARSE_RETRIES
 
 NO_ISSUES = {"issues": []}
 MINOR = {"issues": [{"leaf_id": "S.2", "type": "subjective", "severity": "minor",
@@ -47,7 +46,7 @@ def test_full_run_writes_all_artifacts(tmp_path):
 
     assert result == {"valid": 1, "failed": 0}
     assert llm.stages() == ["spec", "draft", "draft", "draft", "merge", "critic"]
-    assert [c["temperature"] for c in llm.calls if c["stage"] == "draft"] == [0.7] * 3
+    assert {c["temperature"] for c in llm.calls} == {1.0}
     case_dir = run_dir / "cases" / CASE["id"]
     for name in ("spec.json", "draft_1.json", "draft_2.json", "draft_3.json", "merged.json",
                  "critic_1.json", "final.json", "calls.jsonl"):
@@ -63,7 +62,7 @@ def test_full_run_writes_all_artifacts(tmp_path):
                                   "界面视觉设计精致统一，看起来是经过设计的完整产品"]
     assert "support" in (case_dir / "merged.json").read_text()
     assert "support" not in json.dumps(record["tree"])
-    assert record["branch_weights"] == pytest.approx({b: 0.25 for b in schema.BRANCHES})
+    assert "branch_weights" not in record
     assert record["meta"]["usage"]["calls"] == 6
     assert record["meta"]["critic_rounds"] == 1
     assert record["meta"]["stats"]["leaves"] == 17
@@ -80,6 +79,17 @@ def test_minor_issue_triggers_one_revise(tmp_path):
     case_dir = run_dir / "cases" / CASE["id"]
     assert (case_dir / "revised_1.json").exists() and not (case_dir / "critic_2.json").exists()
     assert _final(run_dir)["meta"]["critic_rounds"] == 1
+
+
+def test_a_revise_with_one_branch_is_retried(tmp_path):
+    one_branch = {"tree": {"description": "核心目标", "children": [leaf("x", ["R1"])]}}
+    llm = FakeLLM({"spec": [spec()], "draft": [draft()], "merge": [_merged()],
+                   "critic": [MINOR], "revise": [one_branch, {"tree": tree()}]})
+    result, run_dir = _run(llm, tmp_path)
+    assert result["valid"] == 1
+    assert llm.stages().count("revise") == 2
+    revised = json.loads((run_dir / "cases" / CASE["id"] / "revised_1.json").read_text())
+    assert list(revised["tree"]) == list(schema.BRANCHES)
 
 
 def test_critic_rounds_are_capped(tmp_path):
@@ -102,6 +112,22 @@ def test_resume_skips_finished_cases(tmp_path):
     assert len(llm.calls) == 2 * n_calls
 
 
+def test_a_failed_stage_is_retried_alone_and_a_rerun_resumes_there(tmp_path):
+    llm = FakeLLM({"spec": [spec()], "draft": [draft()], "merge": [_merged()],
+                   "critic": ["no json"]})
+    result, run_dir = _run(llm, tmp_path)
+    assert result == {"valid": 0, "failed": 1}
+    attempts = 1 + PARSE_RETRIES
+    assert llm.stages() == (["spec", "draft", "draft", "draft", "merge"]
+                            + ["critic"] * attempts * (1 + pipeline.CASE_RETRIES))
+
+    llm = FakeLLM({"critic": [NO_ISSUES]})   # any other stage would raise KeyError
+    result, run_dir = _run(llm, tmp_path)
+    assert result == {"valid": 1, "failed": 0}
+    assert llm.stages() == ["critic"]
+    assert not (run_dir / "cases" / CASE["id"] / "failed.json").exists()
+
+
 def test_invalid_case_goes_to_failed_jsonl(tmp_path):
     small = tree()
     small["static"]["children"] = small["static"]["children"][2:]   # 11 + 3 universal
@@ -110,7 +136,9 @@ def test_invalid_case_goes_to_failed_jsonl(tmp_path):
     result, run_dir = _run(llm, tmp_path)
 
     assert result == {"valid": 0, "failed": 1}
-    assert llm.stages().count("repair_tree") == pipeline.MAX_REPAIRS
+    # Each retry of the case starts at the repair; the earlier stages are not run again.
+    assert llm.stages().count("repair_tree") == pipeline.MAX_REPAIRS * (1 + pipeline.CASE_RETRIES)
+    assert llm.stages().count("merge") == 1 and llm.stages().count("critic") == 1
     assert (run_dir / "rubrics.jsonl").read_text() == ""
     failed = [json.loads(line) for line in (run_dir / "failed.jsonl").read_text().splitlines()]
     assert failed[0]["id"] == CASE["id"]
@@ -168,8 +196,6 @@ def test_baseline_method(tmp_path):
     record = _final(run_dir)
     assert record["method"] == "webdevjudge_baseline" and record["spec"] is None
     assert record["tree"]["content"]["children"] == []
-    assert record["branch_weights"] == pytest.approx(
-        {"intention": 1 / 6, "content": 0, "static": 0.5, "dynamic": 1 / 3})
     assert record["tree"]["dynamic"]["children"][1]["children"][0] == {
         "id": "D.C.1", "description": "刷新后仍在", "critical": False,
         "origin": "explicit", "covers": [], "verify_by": "interaction", "children": None}
@@ -185,3 +211,32 @@ def test_baseline_with_bad_structure_is_repaired(tmp_path):
     llm = FakeLLM({"baseline": [bad], "repair_baseline": [{"rubric_tree": good}]})
     result, _ = _run(llm, tmp_path, method="webdevjudge_baseline")
     assert result["valid"] == 1 and llm.stages() == ["baseline", "repair_baseline"]
+
+
+def test_case_as_of_goes_to_the_spec_and_spec_date_to_later_stages(tmp_path):
+    s = spec()
+    s["time_frame"] = {"date": "2025", "evidence_quote": "一周的统计", "rationale": "测试"}
+    llm = FakeLLM({"spec": [s], "draft": [draft()], "merge": [_merged()],
+                   "critic": [MINOR], "revise": [{"tree": tree()}]})
+    opts = pipeline.Options(as_of="2026-10-12")
+    asyncio.run(pipeline.run_all(llm, [{**CASE, "as_of": "2026-01-05"}], tmp_path / "run", opts))
+
+    record = _final(tmp_path / "run")
+    assert record["as_of"] == "2026-01-05" and record["spec"]["time_frame"]["date"] == "2025"
+    user = {c["stage"]: c["messages"][1]["content"] for c in llm.calls}
+    assert "as_of (the user's today, unless the query shows another time): 2026-01-05" in user["spec"]
+    for stage in ("draft", "merge", "critic", "revise"):
+        assert "The user's today (spec.time_frame.date): 2025\n" in user[stage], stage
+        assert "2026-01-05" not in user[stage], stage
+
+
+def test_an_empty_basic_group_is_repaired(tmp_path):
+    empty = tree()
+    empty["dynamic"]["children"][0]["children"] = []
+    llm = FakeLLM({"spec": [spec()], "draft": [draft()], "merge": [{"tree": empty}],
+                   "critic": [NO_ISSUES], "repair_tree": [{"tree": tree()}]})
+    result, _ = _run(llm, tmp_path)
+    assert result["valid"] == 1
+    assert llm.stages().count("repair_tree") == 1
+    repair_prompt = llm.calls[-1]["messages"][1]["content"]
+    assert "D.B: a group must have at least one child; write a single-step" in repair_prompt

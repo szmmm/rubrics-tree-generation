@@ -10,8 +10,7 @@ def test_valid_record_passes():
 
 def test_worked_example_passes_the_validator():
     tree = pipeline._prepare(prompts.EXAMPLE_TREE, archetypes.universal_leaves(prompts.EXAMPLE_SPEC))
-    rec = {"prompt": prompts.EXAMPLE_QUERY, "spec": prompts.EXAMPLE_SPEC, "tree": tree,
-           "branch_weights": pipeline._normalize_weights(prompts.EXAMPLE_DRAFT["branch_weight_proposal"])}
+    rec = {"prompt": prompts.EXAMPLE_QUERY, "spec": prompts.EXAMPLE_SPEC, "tree": tree}
     assert schema.validate(rec) == []
 
 
@@ -24,13 +23,16 @@ def test_assign_ids_uses_path_form():
 
 def test_normalize_tree():
     tree = schema.normalize_tree({
-        "intention": {"children": [{"weight": 2, "description": "x", "extra": 1, "children": []}],
+        "intention": {"children": [{"weight": 2, "description": "x", "extra": 1,
+                                    "verify_by": "view", "children": []},
+                                   {"description": "g", "children": []}],
                       "description": "root"},
         "content": {"description": "c", "children": []},
     })
-    child = tree["intention"]["children"][0]
-    assert list(child) == ["description", "critical", "covers", "children"]
+    child, group = tree["intention"]["children"]
+    assert list(child) == ["description", "critical", "covers", "verify_by", "children"]
     assert child["children"] is None and child["critical"] is False
+    assert group == {"description": "g", "critical": False, "children": []}   # no leaf keys
     assert tree["content"]["children"] == []     # an empty branch root stays a group
 
 
@@ -48,6 +50,15 @@ def _drop_branch(rec):
 def _many_critical(rec):
     for nid in ("I.1", "I.2", "I.3", "C.1", "C.2"):
         node(rec, nid)["critical"] = True
+
+
+def test_universal_leaves_do_not_count_toward_the_critical_cap():
+    rec = record()
+    _many_critical(rec)
+    node(rec, "C.2")["critical"] = False   # 5 critical leaves + the critical universal one
+    assert any(n.get("origin") == "universal" and n.get("critical")
+               for n, _ in schema.iter_nodes(rec["tree"]["static"]))
+    assert not [e for e in schema.validate(rec) if "critical nodes" in e]
 
 
 def _extra_requirement(rec):
@@ -76,7 +87,6 @@ CASES = [
     ("too few leaves", lambda r: [r["tree"]["static"]["children"].pop(0) for _ in range(2)],
      "tree has 14 leaves"),
     ("too many leaves", _too_many_leaves, "tree has 47 leaves"),
-    ("weights sum", lambda r: r["branch_weights"].update(intention=0.5), "must sum to 1"),
     ("critical leaf without critical requirement", lambda r: node(r, "S.2").update(critical=True),
      "S.2: a critical leaf must cover a critical requirement"),
     ("critical group", lambda r: node(r, "S.1").update(critical=True), "S.1: a group must not be critical"),
@@ -93,7 +103,7 @@ CASES = [
     ("origin enum", lambda r: node(r, "S.2").update(origin="guess"), "S.2: origin must be one of"),
     ("verify_by enum", lambda r: node(r, "S.2").update(verify_by="smell"), "S.2: verify_by must be"),
     ("note type", lambda r: node(r, "S.2").update(note=3), "S.2: note must be a string"),
-    ("too many critical", _many_critical, "tree has 7 critical nodes; max 5"),
+    ("too many critical", _many_critical, "tree has 6 critical nodes besides the universal leaves; max 5"),
     ("critical root", lambda r: r["tree"]["static"].update(critical=True),
      "S: a branch root must not be critical"),
     ("duplicate description", lambda r: node(r, "S.2").update(description="能记录 喝水！"),
@@ -122,6 +132,10 @@ SPEC_CASES = [
     ("rationale", lambda s: s["requirements"][3].pop("rationale"), "needs a rationale"),
     ("knowledge need", lambda s: s["knowledge_needs"][0].update(generator_confident="yes"),
      "spec.knowledge_needs[0] needs"),
+    ("time_frame", lambda s: s.pop("time_frame"), "spec.time_frame.date must be"),
+    ("time_frame date", lambda s: s["time_frame"].update(date="明年"), "spec.time_frame.date must be"),
+    ("time_frame refers_to", lambda s: s["time_frame"].update(refers_to=""),
+     "spec.time_frame.refers_to must be"),
 ]
 
 
@@ -168,3 +182,23 @@ def test_webdevjudge_errors(name, mutate, expected):
     mutate(wdj)
     errors = schema.webdevjudge_errors(wdj)
     assert any(expected in e for e in errors), errors
+
+
+def test_time_frame_other_than_as_of_needs_quote_and_rationale():
+    rec = record()
+    rec["spec"]["time_frame"] = {"date": "2025"}
+    errors = schema.validate(rec)
+    assert any("evidence_quote None must be an exact substring" in e for e in errors), errors
+    assert any("so it needs a rationale" in e for e in errors), errors
+    rec["spec"]["time_frame"].update(evidence_quote="每天喝水量", rationale="测试")
+    assert schema.validate(rec) == []
+
+
+def test_an_emptied_dynamic_group_says_what_to_add():
+    rec = record()
+    rec["tree"]["dynamic"]["children"][0]["children"] = []
+    rec["tree"] = schema.assign_ids(schema.normalize_tree(rec["tree"]))
+    errors = schema.validate(rec)
+    assert ("D.B: a group must have at least one child; "
+            "write a single-step interaction leaf for it") in errors
+    assert not any("exactly two groups" in e or "origin must be" in e for e in errors), errors

@@ -49,19 +49,17 @@ def test_failed_critical_leaf_sets_the_whole_score_to_zero():
     assert result["score"] == 0.0 and result["failed_critical"] == ["D.C.1"]
 
 
-def test_branch_weights_are_used_when_present():
-    passed = {i: True for i in ALL} | {"I.1": False}
-    rec = _record() | {"branch_weights": {"intention": 0.1, "content": 0.2, "static": 0.3, "dynamic": 0.4}}
-    # content (0.2) is skipped: (0.1 * 0 + 0.3 + 0.4) / 0.8
-    assert score(rec, passed)["score"] == pytest.approx(0.7 / 0.8)
-
-
-def test_empty_branch_is_skipped():
+def test_root_is_the_flat_pass_rate_over_all_leaves():
     passed = {i: True for i in ALL} | {"I.1": False}
     result = score(_record(), passed)
+    # 6 of the 7 leaves pass; the branch sizes (1, 3, 3) do not matter
+    assert result["score"] == pytest.approx(6 / 7)
+    assert result["branches"]["intention"] == 0.0
+
+
+def test_empty_branch_has_no_rate():
+    result = score(_record(), {i: True for i in ALL})
     assert result["branches"]["content"] is None
-    # content is skipped: (0 + 1 + 1) / 3
-    assert result["score"] == pytest.approx(2 / 3)
 
 
 def test_scores_a_generated_record():

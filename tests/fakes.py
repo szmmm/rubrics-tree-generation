@@ -19,9 +19,9 @@ class FakeLLM(LLM):
         self.responses = {stage: list(items) for stage, items in responses.items()}
         self.calls: list[dict] = []
 
-    async def _complete(self, messages, *, model, temperature, stage):
+    async def _complete(self, messages, *, model, temperature, seed, stage):
         self.calls.append({"stage": stage, "model": model, "temperature": temperature,
-                           "messages": messages})
+                           "seed": seed, "messages": messages})
         queue = self.responses[stage]
         item = queue.pop(0) if len(queue) > 1 else queue[0]
         text = item if isinstance(item, str) else json.dumps(item, ensure_ascii=False)
@@ -37,6 +37,7 @@ def spec() -> dict:
         "delivery": "unspecified",
         "ui_language": "zh",
         "design_focus": False,
+        "time_frame": {"date": "2026-10-12"},
         "requirements": [
             {"id": "R1", "type": "explicit", "text": "记录每天喝水量",
              "evidence_quote": "记录每天喝水量", "critical": True},
@@ -82,8 +83,7 @@ def tree() -> dict:
 
 
 def draft() -> dict:
-    return {"branch_weight_proposal": {"intention": 1, "content": 1, "static": 1, "dynamic": 1},
-            "tree": tree()}
+    return {"tree": tree()}
 
 
 def record() -> dict:
@@ -93,7 +93,7 @@ def record() -> dict:
     t["static"]["children"] += archetypes.universal_leaves(s)
     schema.assign_ids(t)
     return {"id": CASE["id"], "prompt": QUERY, "as_of": "2026-10-12", "method": "full",
-            "spec": s, "branch_weights": {b: 0.25 for b in schema.BRANCHES}, "tree": t, "meta": {}}
+            "spec": s, "tree": t, "meta": {}}
 
 
 def node(rec: dict, node_id: str) -> dict:

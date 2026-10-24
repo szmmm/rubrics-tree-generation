@@ -27,6 +27,7 @@ _KEY_ORDER = ("id", "description", "critical", "origin", "covers",
               "verify_by", "note", "support", "children")
 
 _WDJ_BRANCHES = ("intention", "static", "dynamic")
+_LEAF_KEYS = ("origin", "covers", "verify_by")
 
 
 def is_leaf(node: dict) -> bool:
@@ -47,9 +48,11 @@ def leaves(node: dict) -> list[dict]:
 def normalize_tree(tree):
     """Bring an LLM-written tree into the canonical key order and shape.
 
-    A non-root node with an empty children list becomes a leaf. Missing
-    "critical" is false, and missing leaf "covers" is empty. Unknown keys go.
-    Everything else stays for the validator to judge.
+    A non-root node with an empty children list becomes a leaf if it has a
+    leaf key (origin, covers, verify_by); else it stays an empty group, which
+    the validator reports. Missing "critical" is false, and missing leaf
+    "covers" is empty. Unknown keys go. Everything else stays for the
+    validator to judge.
     """
     if not isinstance(tree, dict):
         return tree
@@ -62,7 +65,7 @@ def _normalize(node, *, root: bool = False):
         return node
     node = dict(node)
     children = node.get("children")
-    if children == [] and not root:
+    if children == [] and not root and any(k in node for k in _LEAF_KEYS):
         children = None
     node["children"] = ([_normalize(c) for c in children]
                         if isinstance(children, list) else children)
@@ -98,8 +101,9 @@ def _assign(node: dict, node_id: str) -> None:
 
 # ── validation ────────────────────────────────────────────────────────────
 
-def validate_spec(spec, query: str) -> list[str]:
-    """Errors in the stage-1 query analysis."""
+def validate_spec(spec, query: str, as_of: str | None = None) -> list[str]:
+    """Errors in the stage-1 query analysis. Without as_of, time_frame.date
+    is only checked for its form."""
     if not isinstance(spec, dict):
         return ["spec must be a JSON object"]
     errors = []
@@ -114,6 +118,22 @@ def validate_spec(spec, query: str) -> list[str]:
         errors.append(f"spec.ui_language must be one of {', '.join(LANGUAGES)}")
     if not isinstance(spec.get("design_focus"), bool):
         errors.append("spec.design_focus must be true or false")
+
+    frame = spec.get("time_frame")
+    day = frame.get("date") if isinstance(frame, dict) else None
+    if not (isinstance(day, str) and re.fullmatch(r"\d{4}(-\d{2}){0,2}", day)):
+        errors.append('spec.time_frame.date must be "YYYY", "YYYY-MM" or "YYYY-MM-DD"; '
+                      f"got {day!r}")
+    elif as_of is not None and day != as_of:
+        quote = frame.get("evidence_quote")
+        if not _text(quote) or _squeeze(quote) not in _squeeze(query):
+            errors.append(f"spec.time_frame: date {day} is not as_of ({as_of}), so its "
+                          f"evidence_quote {quote!r} must be an exact substring of the query")
+        if not _text(frame.get("rationale")):
+            errors.append(f"spec.time_frame: date {day} is not as_of ({as_of}), so it "
+                          "needs a rationale")
+    if isinstance(frame, dict) and "refers_to" in frame and not _text(frame["refers_to"]):
+        errors.append("spec.time_frame.refers_to must be a non-empty string when present")
 
     requirements = spec.get("requirements")
     if not isinstance(requirements, list) or not requirements:
@@ -159,7 +179,7 @@ def validate_spec(spec, query: str) -> list[str]:
 def validate(record: dict) -> list[str]:
     """Errors in a full-method record. An empty list means valid."""
     spec = record.get("spec")
-    errors = validate_spec(spec, record.get("prompt", ""))
+    errors = validate_spec(spec, record.get("prompt", ""), record.get("as_of"))
     tree = record.get("tree")
     if not isinstance(tree, dict) or set(tree) != set(BRANCHES):
         return errors + [f"tree must have exactly the branches {', '.join(BRANCHES)}"]
@@ -186,9 +206,12 @@ def validate(record: dict) -> list[str]:
     if not MIN_LEAVES <= len(all_leaves) <= MAX_LEAVES:
         errors.append(f"tree has {len(all_leaves)} leaves; it needs "
                       f"{MIN_LEAVES}-{MAX_LEAVES}")
-    n_critical = sum(1 for n in nodes if n.get("critical") is True)
+    # The universal leaves are fixed by code and do not count toward the cap.
+    n_critical = sum(1 for n in nodes
+                     if n.get("critical") is True and n.get("origin") != "universal")
     if n_critical > MAX_CRITICAL:
-        errors.append(f"tree has {n_critical} critical nodes; max {MAX_CRITICAL}")
+        errors.append(f"tree has {n_critical} critical nodes besides the universal leaves; "
+                      f"max {MAX_CRITICAL}")
 
     ids = [n.get("id") for n in nodes]
     for dup in sorted({i for i in ids if ids.count(i) > 1}, key=str):
@@ -218,8 +241,6 @@ def validate(record: dict) -> list[str]:
         if (leaf.get("critical") is True and leaf.get("origin") != "universal"
                 and not critical_reqs & set(leaf.get("covers") or [])):
             errors.append(f"{leaf.get('id')}: a critical leaf must cover a critical requirement")
-
-    errors += _check_branch_weights(record.get("branch_weights"))
     return errors
 
 
@@ -248,7 +269,9 @@ def _check_node(node, branch: str, depth: int, found: list) -> list[str]:
     if not isinstance(children, list):
         return errors + [f"{nid}: children must be a list or null"]
     if not children and not (depth == 0 and branch == "content"):
-        errors.append(f"{nid}: a group must have at least one child")
+        hint = {"D.B": "; write a single-step interaction leaf for it",
+                "D.C": "; write a multi-step interaction leaf for it"}.get(nid, "")
+        errors.append(f"{nid}: a group must have at least one child{hint}")
     for child in children:
         errors += _check_node(child, branch, depth + 1, found)
     return errors
@@ -274,16 +297,6 @@ def _check_leaf(leaf: dict, branch: str, depth: int) -> list[str]:
     if "note" in leaf and not isinstance(leaf["note"], str):
         errors.append(f"{nid}: note must be a string")
     return errors
-
-
-def _check_branch_weights(weights) -> list[str]:
-    if not (isinstance(weights, dict) and set(weights) == set(BRANCHES)
-            and all(isinstance(w, (int, float)) and not isinstance(w, bool) and w >= 0
-                    for w in weights.values())):
-        return [f"branch_weights must map {', '.join(BRANCHES)} to numbers >= 0"]
-    if abs(sum(weights.values()) - 1) > 1e-6:
-        return [f"branch_weights must sum to 1; got {sum(weights.values())}"]
-    return []
 
 
 def webdevjudge_errors(tree) -> list[str]:

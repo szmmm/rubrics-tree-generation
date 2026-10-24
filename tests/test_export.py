@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from fakes import record
 from rubric_tree import export, prompts, schema
 from rubric_tree.__main__ import main
@@ -43,3 +45,21 @@ def test_cli_stats_and_export(tmp_path, capsys):
     md = tmp_path / "review.md"
     assert main(["export", str(rubrics), "--format", "markdown", "--out", str(md)]) == 0
     assert "case-x" in md.read_text(encoding="utf-8")
+
+
+def test_markdown_shows_the_user_date():
+    assert "user's today: 2026-10-12" in export.to_markdown([record()])
+    rec = record()
+    rec["spec"]["time_frame"] = {"date": "2025", "evidence_quote": "每天喝水量", "rationale": "测试",
+                                 "refers_to": "2026年夏天"}
+    text = export.to_markdown([rec])
+    assert "user's today: 2025 · about: 2026年夏天" in text
+    assert "- time: not as_of 2026-10-12 — “每天喝水量”, because: 测试" in text
+
+
+def test_cli_rejects_a_bad_as_of(tmp_path):
+    cases = tmp_path / "in.jsonl"
+    cases.write_text(json.dumps({"id": "a", "prompt": "q", "as_of": "明年"}) + "\n",
+                     encoding="utf-8")
+    with pytest.raises(SystemExit, match="as_of is not a YYYY-MM-DD date: a"):
+        main(["generate", "--input", str(cases), "--run-name", "x"])
