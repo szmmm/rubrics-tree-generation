@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from collections import Counter
 
-from .schema import BRANCHES, iter_nodes, leaves
+from .schema import BRANCHES, ORIGINS, iter_nodes, leaves
 
 
 def tree_stats(record: dict) -> dict:
@@ -22,14 +22,14 @@ def tree_stats(record: dict) -> dict:
 def summary_table(records: list[dict]) -> str:
     """One row per record plus a mean row, as a Markdown table."""
     head = ["id", "method", "leaves", *BRANCHES, "depth", "critical",
-            "explicit", "implicit", "archetype", "universal", "fact"]
+            *ORIGINS, "fact"]
     rows = []
     for r in records:
         s = tree_stats(r)
         rows.append([r["id"], r["method"], s["leaves"],
                      *(s["leaves_by_branch"][b] for b in BRANCHES), s["max_depth"],
                      s["critical"],
-                     *(s["origin"].get(o, 0) for o in ("explicit", "implicit", "archetype", "universal")),
+                     *(s["origin"].get(o, 0) for o in ORIGINS),
                      s["verify_by"].get("fact", 0)])
     if rows:
         rows.append(["mean", "", *(round(sum(row[i] for row in rows) / len(rows), 1)

@@ -13,13 +13,14 @@ BRANCHES = ("intention", "content", "static", "dynamic")
 BRANCH_IDS = {"intention": "I", "content": "C", "static": "S", "dynamic": "D"}
 DYNAMIC_CHILD_IDS = ("D.B", "D.C")    # basic, then complex
 
-ORIGINS = ("explicit", "implicit", "archetype", "universal")
+REQUIREMENT_TYPES = ("explicit", "implicit", "attractive")
+ORIGINS = (*REQUIREMENT_TYPES, "archetype", "universal")
 VERIFY_BY = ("view", "interaction", "fact")
 DELIVERIES = ("mobile_app", "single_page", "unspecified")
 
 MIN_LEAVES, MAX_LEAVES = 15, 40
 MAX_DEPTH = 4          # levels below a branch root
-MAX_CRITICAL = 5
+MAX_ATTRACTIVE = 4     # attractive requirements per spec, and attractive leaves per tree
 
 # Keys a node can carry, in the order they are written. "support" exists only
 # between the merge and the final record.
@@ -158,11 +159,17 @@ def validate_spec(spec, query: str, as_of: str | None = None) -> list[str]:
             if not _text(quote) or _squeeze(quote) not in _squeeze(query):
                 errors.append(f"{where}: evidence_quote {quote!r} is not an exact "
                               "substring of the query")
-        elif req.get("type") == "implicit":
+        elif req.get("type") in ("implicit", "attractive"):
             if not _text(req.get("rationale")):
-                errors.append(f"{where}: an implicit requirement needs a rationale")
+                errors.append(f"{where}: an {req['type']} requirement needs a rationale")
+            if req["type"] == "attractive" and req.get("critical") is True:
+                errors.append(f"{where}: an attractive requirement must not be critical")
         else:
-            errors.append(f"{where}: type must be explicit or implicit")
+            errors.append(f"{where}: type must be one of {', '.join(REQUIREMENT_TYPES)}")
+    n_attractive = sum(1 for r in requirements
+                       if isinstance(r, dict) and r.get("type") == "attractive")
+    if n_attractive > MAX_ATTRACTIVE:
+        errors.append(f"spec has {n_attractive} attractive requirements; max {MAX_ATTRACTIVE}")
 
     needs = spec.get("knowledge_needs")
     if not isinstance(needs, list):
@@ -206,12 +213,6 @@ def validate(record: dict) -> list[str]:
     if not MIN_LEAVES <= len(all_leaves) <= MAX_LEAVES:
         errors.append(f"tree has {len(all_leaves)} leaves; it needs "
                       f"{MIN_LEAVES}-{MAX_LEAVES}")
-    # The universal leaves are fixed by code and do not count toward the cap.
-    n_critical = sum(1 for n in nodes
-                     if n.get("critical") is True and n.get("origin") != "universal")
-    if n_critical > MAX_CRITICAL:
-        errors.append(f"tree has {n_critical} critical nodes besides the universal leaves; "
-                      f"max {MAX_CRITICAL}")
 
     ids = [n.get("id") for n in nodes]
     for dup in sorted({i for i in ids if ids.count(i) > 1}, key=str):
@@ -241,6 +242,24 @@ def validate(record: dict) -> list[str]:
         if (leaf.get("critical") is True and leaf.get("origin") != "universal"
                 and not critical_reqs & set(leaf.get("covers") or [])):
             errors.append(f"{leaf.get('id')}: a critical leaf must cover a critical requirement")
+
+    # An attractive leaf covers only attractive requirements, and only it covers
+    # them, so the leaf cap is the weight cap.
+    attractive_reqs = {r.get("id") for r in requirements if r.get("type") == "attractive"}
+    for leaf in all_leaves:
+        covers = set(leaf.get("covers") or []) if isinstance(leaf.get("covers"), list) else set()
+        if leaf.get("origin") == "attractive":
+            if leaf.get("critical") is True:
+                errors.append(f"{leaf.get('id')}: an attractive leaf must not be critical")
+            if not covers <= attractive_reqs:
+                errors.append(f"{leaf.get('id')}: an attractive leaf must cover only "
+                              "attractive requirements")
+        elif covers & attractive_reqs:
+            errors.append(f"{leaf.get('id')}: a leaf that covers an attractive requirement "
+                          "must have origin \"attractive\"")
+    n_attractive = sum(1 for leaf in all_leaves if leaf.get("origin") == "attractive")
+    if n_attractive > MAX_ATTRACTIVE:
+        errors.append(f"tree has {n_attractive} attractive leaves; max {MAX_ATTRACTIVE}")
     return errors
 
 
@@ -292,7 +311,7 @@ def _check_leaf(leaf: dict, branch: str, depth: int) -> list[str]:
     covers = leaf.get("covers")
     if not (isinstance(covers, list) and all(isinstance(c, str) for c in covers)):
         errors.append(f"{nid}: covers must be a list of requirement ids")
-    elif origin in ("explicit", "implicit") and not covers:
+    elif origin in REQUIREMENT_TYPES and not covers:
         errors.append(f"{nid}: an {origin} leaf must list the requirement ids it covers")
     if "note" in leaf and not isinstance(leaf["note"], str):
         errors.append(f"{nid}: note must be a string")

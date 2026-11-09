@@ -14,6 +14,7 @@ query ─▶ [1 spec] ─▶ [2 archetype guidance] ─▶ [3 K drafts] ─▶ [
 
 The tree has four branches: `intention`, `content`, `static`, `dynamic` (`dynamic` has the groups basic `D.B` and complex `D.C`).
 Each leaf is one yes/no check, with a `critical` flag, an `origin`, the spec requirements it `covers`, and a `verify_by` method.
+Spec requirements follow the Kano model: `explicit` (asked for), `implicit` (taken for granted) and `attractive` (not asked for, but valued; at most 4 per tree, one leaf each, never critical). See PLAN §4.1.
 Code assigns all ids, adds the universal leaves and runs the validator.
 The reference scorer in `rubric_tree/score.py` defines what the gates mean. There are no node or branch weights: a node is critical or not. A failed critical node sets the whole score to 0 (decided 2026-10-20). Else the score is the pass rate over all leaves; the branches only group the leaves (decided 2026-10-23).
 
@@ -109,7 +110,7 @@ One test checks that the worked example in `prompts.py` passes the validator.
 ## Differences from PLAN.md
 
 - Records and nodes are plain dicts in the JSON shape, not dataclasses.
-- At most 5 critical leaves besides the universal leaves (decided 2026-10-24). In a 100-query run the critic asked for a 5th critical leaf of the LLM's own in about half of the trees, and the universal one made it 6. At the cap, the critic asks to swap a critical flag, not to add one.
+- No cap on critical leaves (decided 2026-10-25): every leaf that meets the critical bar is critical. PLAN's limit of 5 is not used.
 - A draft, merge, revise or tree repair that does not return the four branches is retried like a response without JSON. Revise once returned only the branch it changed (8 of 100 cases).
 - Every call samples at temperature 1.0 and top_p 0.95. PLAN's draft temperature 0.7 and the 0.1 rise per JSON retry are not used; a retry gets a new seed.
 - Code removes and adds the universal leaves again after every LLM rewrite (merge, revise, repair). Thus no LLM can change them.

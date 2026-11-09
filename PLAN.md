@@ -90,20 +90,20 @@ One JSON object per query. Output file: `rubrics.jsonl`, one line per case.
 | `description` | str | Internal node: short group name. Leaf: one yes/no statement, in the query language (see §9 Q3). |
 | `critical` | bool | Leaves only. A hard boundary: if this leaf fails, the whole app scores 0 (decided 2026-10-20; Mind2Web 2 gates only the parent). Default false. |
 | `children` | list[Node] \| null | null for a leaf. |
-| Leaf only: `origin` | enum | `explicit` (stated in query) \| `implicit` (inferred from query context) \| `archetype` (default expectation for the app type) \| `universal` (fixed, added by code). |
-| Leaf only: `covers` | list[str] | Spec requirement ids (`R1`, `R2` …) that this leaf checks. Required for `explicit` and `implicit`. |
+| Leaf only: `origin` | enum | `explicit` (stated in query) \| `implicit` (must-be quality: inferred from query context or from what every product of this kind has) \| `attractive` (a feature the user did not ask for but would value; at most 4 per tree, never critical) \| `archetype` (default expectation for the app type) \| `universal` (fixed, added by code). |
+| Leaf only: `covers` | list[str] | Spec requirement ids (`R1`, `R2` …) that this leaf checks. Required for `explicit`, `implicit` and `attractive`. An `attractive` leaf covers only attractive requirements, and only attractive leaves cover them. |
 | Leaf only: `verify_by` | enum | `view` (visible on load or in code) \| `interaction` (needs user actions; RCCA "dynamic") \| `fact` (needs external knowledge or search to check). |
 | Leaf only: `note` | str, optional | Guidance for the judge: tolerance, accepted alternatives. Example: "任何清晰标注血糖友好的方式都可以，如标签、图标或分类". |
 
 Branch meaning:
 
-- `intention` (3–6 leaves): the core goals. "Does this app do what the user wanted at all?"
-- `content` (0–15 leaves): the information the app shows. Accuracy, completeness, fit to the user's context, internal consistency (sums, dates), freshness. Empty only if the spec says the query has no content needs (for example a pure chess game).
-- `static` (4–12 leaves): visible structure and look on load. Required sections and elements, readable layout, mobile layout when the user said "APP", visual style when the user asked for one.
+- `intention`: the core goals. "Does this app do what the user wanted at all?"
+- `content`: the information the app shows. Accuracy, completeness, fit to the user's context, internal consistency (sums, dates), freshness. Empty only if the spec says the query has no content needs (for example a pure chess game).
+- `static`: visible structure and look on load. Required sections and elements, readable layout, mobile layout when the user said "APP", visual style when the user asked for one.
 - `dynamic.basic`: single-step interactions (tap, type, select, play).
 - `dynamic.complex`: multi-step flows and state changes (create → reload → still there; finish a game; switch person and see other data).
 
-Size target: 15–40 leaves in total, depending on query complexity. Max depth 4 below a branch root. WebDevJudge averaged 29.9 leaves and height 5.
+Size target: 15–40 leaves in total, depending on query complexity. There are no leaf counts per branch (decided 2026-10-26; WebDevJudge has none). Max depth 4 below a branch root. WebDevJudge averaged 29.9 leaves and height 5.
 
 ### Worked example (fragment, case-06)
 
@@ -160,9 +160,11 @@ Output (JSON):
 
 Rules in the prompt:
 
-- The bar for every requirement, explicit or implicit: if the app does not meet it, the user's goal fails or the user is let down. A feature that is only nice to have is not a requirement.
+- Three requirement types, after the Kano model of product quality (decided 2026-10-30): what the user asked for, what the user takes for granted, and what the user did not expect but values. Reason: in `dsv4-rand100-max-t1` the implicit requirements (3.0 per case) only filled gaps in the core function (for a Canva clone: "text can be edited", "images can be uploaded"), and the critic removed leaves such as sample data on first open as `ungrounded`. A tree that checks only the core function cannot tell a working app from a thoughtful one.
 - Explicit requirement = stated in the query, or follows directly from words in the query. `evidence_quote` is those words and must be an exact substring of the query (code checks this).
-- Implicit requirement = a need that no words in the query state, but that this user needs in this context, with a `rationale` that cites the context. (OpenRubrics "principles"; HealthBench "context awareness".)
+- Implicit requirement (Kano must-be quality) = a need that no words in the query state, but that a typical user with this request takes for granted: if it is missing, the user is let down; if it is there, the user does not notice. Two sources: this user's context (OpenRubrics "principles"; HealthBench "context awareness"), and what every competent product of this kind has today (an editor can undo; the user can edit and delete what they added; a delete asks for confirmation or can be undone; invalid input gets a clear message). Only the must-be qualities that the main flows need. A `rationale` cites the context or the kind of product.
+- Attractive requirement (Kano attractive quality) = a feature that no words in the query state and that the user would not miss, but would notice and value, because it serves this user's goal or the next thing the user does with the result. The `rationale` names the words of the query it serves. Example: a daily news digest to post in a WeChat group gets one-click copy, ready to paste. 0–4 per query (code checks the spec and the tree); 0–1 is normal for a simple or narrow request; none that goes against a stated wish ("简单", "别的都不用"). Never critical: a user is not let down by a feature they did not expect. Specific to the query, not a feature for any app ("深色模式"); a quality that users of this kind of product take for granted today is implicit. A user-visible result, not a mechanism. Each one gets exactly one leaf with `origin: "attractive"`; otherwise attractive leaves are normal leaves with the same weight (decided 2026-10-30). The cap of 4 lets an app that does only what was asked pass at least 73% (4 of 15 leaves) to 90% (4 of 40) of the leaves, so attractive features separate good apps from thoughtful ones without outweighing the request.
+- The bar for explicit and implicit requirements: if the app does not meet it, the user's goal fails or the user is let down. A feature that is only nice to have is not an explicit or implicit requirement; it can be attractive.
 - Make each requirement one need: no "or" lists, no "最好" or "ideally".
 - `critical` uses the **critical bar** (`prompts.CRITICAL_BAR`, shared with leaf rule 9; decided 2026-10-23): a requirement or a leaf is critical only if failing it, by itself, badly hurts the user's experience or the user's view of the result. Test: think of an app that does everything else well but fails this one. If the user would call that app broken, wrong, or not what they asked for, it is critical. If the user would only find it weaker, less complete or less polished, it is not critical. A nice-to-have feature is never critical. This replaced a 1–5 `importance` score (decided 2026-10-20): two tiers, as for leaves. A critical leaf must cover a critical requirement.
 - Do not write requirements for the environment profile, or for what the universal leaves check (page loads, UI language, mobile width).
@@ -200,7 +202,7 @@ Each draft returns the tree. The LLM writes no ids; code assigns them.
 
 Leaf-writing rules (shared by stages 3–5):
 
-1. **Atomic**: one checkable fact per leaf. No "和/并且" joining two checks.
+1. **Atomic**: one checkable fact per leaf. If a real app can pass one part of a leaf and fail another, split the leaf. No "和/并且" joining two checks.
 2. **Binary and observable**: a judge answers yes or no from the app. Observable defects (overlapping or cut-off text, low contrast) are normal leaves. When design_focus is false, code adds one universal leaf for overall visual quality: do not write your own generic look leaf (Bad: "页面很美观"). When design_focus is true, write yes/no leaves for the look the user asked for, each with a note that tells the judge what to look at. Example: "页面整体呈现复古像素游戏风格", note "看字体、图标和边框是否为像素风格".
 3. **Self-contained** (RaR): the leaf makes sense without reading the query.
 4. **Functional, not literal** (WebDevJudge failure mode): describe the user-visible effect, not a label, layout, element type or library — unless the user named it. Bad: "有一个名为'今日任务'的卡片". Good: "打开应用即可看到当天要做的学习任务".
@@ -209,6 +211,8 @@ Leaf-writing rules (shared by stages 3–5):
 7. **Positive polarity**: pass = good. Write pitfalls as positive leaves (RaR). Example: "预算各项之和与总预算一致".
 8. **No double counting**: no two leaves may be duplicates, in the same branch or in different branches. Two leaves are duplicates when they measure the same thing, or when every app that passes one also passes the other and every app that fails one also fails the other. Keep one of them. Common cases: one feature split into steps that pass or fail together (for example a music player that can play, pause and resume: keep one leaf); the same check again in a later flow, with nothing new to check. A single step and a longer flow that contains it are not duplicates: the flow can fail after the step works. An intention leaf can overlap the detailed leaves that check its goal: that is not double counting. Reason: every leaf has the same weight (§5), so the number of leaves for a need is its weight (decided 2026-10-23). The two-way test replaced "an app that passes one almost always passes the other" (decided 2026-10-23, evening): the one-way test made a single step a duplicate of any flow that contains it, and merges emptied the basic group.
 9. **Gate by the critical bar** (§4.1): a failed critical leaf sets the whole score to 0. Mark a leaf critical only if it meets the bar by itself and covers at least one critical requirement. When several leaves cover the same critical requirement, mark only the leaf that checks its core. A judge must be able to decide a critical leaf without taste: never mark a look or style leaf critical. At most 5 per tree: this is a limit, not a target, and fewer is normal (in half-b-5 every tree had exactly 5). Never on a branch root.
+
+No generator values as the bar (decided 2026-10-26, after a review of `dsv4-rand100-max-t1`). A leaf states what the judge checks, not the generator's answer. Where reputable sources differ, the leaf checks agreement with an authoritative source (rule 6). A critical leaf states no value that is not in the query (rule 9). A spec requirement states the need, not values. Reason: in 9a30f4d85108, critical I.4 required 37–40℃, 10–20 minutes and 2–4 times a day, so an app that follows another reputable source scored 0.
 
 ### 4.4 Stage 4: merge (one LLM call + code)
 
@@ -230,12 +234,12 @@ Issue types, each tied to a source:
 
 | Type | Check | Source |
 |---|---|---|
-| `missing` | An explicit or implicit requirement has no adequate leaf, or a core flow is not tested end to end | coverage; RaR |
+| `missing` | A spec requirement has no adequate leaf, a core flow is not tested end to end, or the tree checks only the core function and misses a must-be quality of this kind of product that the main flows need (fix: an archetype leaf) | coverage; RaR; Kano must-be |
 | `not_atomic` | Leaf checks two things | RLCF; PaperBench |
 | `subjective` | A look leaf without a note that tells the judge what to look at, or a generic look leaf that repeats the universal one | RaR "objective" |
 | `over_specific` | Leaf demands one implementation where others serve the user equally | WebDevJudge §4.3 |
 | `too_broad` | Leaf is too vague to fail | WebDevJudge App. B.2 |
-| `ungrounded` | Leaf demands a feature with no basis in query or archetype (gold-plating); low `support` is a hint | WebDevJudge App. B.2 |
+| `ungrounded` | Leaf demands a feature with no basis in query, archetype or an attractive requirement (gold-plating); low `support` is a hint. An attractive leaf that covers an attractive requirement is grounded: the critic rewrites a weak one, it does not remove it | WebDevJudge App. B.2 |
 | `infeasible` | Leaf cannot pass in the environment profile, requires a fact that was not known at the user's today (`spec.time_frame.date`), or fails an app that shows such a fact correctly | WebDevJudge feasibility |
 | `hardcoded_fact` | A leaf or a note states a fact as the expected answer, and the fact is wrong or uncertain. The critic checks every number, name, date and rule itself; `generator_confident` is not proof | §4.3 rule 6 |
 | `duplicate` | Two leaves are duplicates by rule 8, in the same branch or in different branches | double counting |
@@ -256,7 +260,8 @@ If there are no issues, stop. Otherwise the reviser gets the tree and the issue 
 - `content` is empty only if `spec.knowledge_needs` is empty and no requirement mentions content.
 - Leaf count 15–40; depth ≤ 4 below each branch root; every internal node has ≥ 1 child. An LLM-written node with `children: []` becomes a leaf only if it has a leaf key (`origin`, `covers`, `verify_by`); an empty group stays a group, so this error reaches the repair step, and for `D.B`/`D.C` it says what kind of leaf to add (decided 2026-10-23: turning an emptied D.B into a leaf made the error unrepairable).
 - Every spec requirement is in the `covers` of at least one leaf.
-- Every `covers` id exists in the spec. `explicit`/`implicit` leaves have non-empty `covers`.
+- Every `covers` id exists in the spec. `explicit`/`implicit`/`attractive` leaves have non-empty `covers`.
+- At most 4 attractive requirements and at most 4 attractive leaves. Neither is critical. An attractive leaf covers only attractive requirements, and a leaf that covers one has `origin: "attractive"`.
 - Every spec `evidence_quote` is a substring of the query.
 - `spec.time_frame.date` is "YYYY", "YYYY-MM" or "YYYY-MM-DD". A date other than the record's `as_of` has an `evidence_quote` that is a substring of the query, and a `rationale`. `refers_to`, if present, is a non-empty string.
 - Leaves under `dynamic` have `verify_by == "interaction"`.
@@ -303,7 +308,7 @@ Single-answer mode only. Input: tree and a map `leaf_id → bool`.
 
 Pairwise scoring and the judge prompts are not in scope. A pairwise judge can use per-leaf A/B/tie (WebDevJudge style).
 
-Nice-to-have features get no leaves. The tree checks only requirements that pass the bar (§4.1) and the archetype defaults. The pairwise judge finds extra features by comparing the two apps, and prefers the app whose extras serve the user better (decided 2026-10-20). The judge must not reward an extra that goes against a stated wish (for example more features on a page the user asked to keep "轻量").
+Nice-to-have features get a leaf only as an attractive requirement (§4.1): at most 4 per tree, never critical (decided 2026-10-30; this replaced "nice-to-have features get no leaves", decided 2026-10-20). Other than those, the tree checks only requirements that pass the bar (§4.1) and the archetype defaults. The pairwise judge finds other extra features by comparing the two apps, and prefers the app whose extras serve the user better (decided 2026-10-20). The judge must not reward an extra that goes against a stated wish (for example more features on a page the user asked to keep "轻量").
 
 ## 6. Code layout
 
@@ -376,6 +381,7 @@ The prompts are the most important part. The implementer must write them in `pro
 | Risk | Mitigation |
 |---|---|
 | Implicit requirements become gold-plating | `rationale` required; critic `ungrounded` check; draft `support`; Phase 2 audit |
+| Attractive requirements reflect the generator's taste, and an RL policy learns to add the same extras to every app | Cap of 4, 0–1 normal for simple requests; `rationale` must name the query words served; no generic features; review the first runs by hand |
 | Leaves demand one implementation | Rule 4; critic `over_specific`; `note` field for accepted alternatives |
 | Wrong facts in leaves | Rule 6; `generator_confident`; `verify_by: fact` |
 | One model's blind spots in all drafts | Option for several draft models; Phase 2 stability check |

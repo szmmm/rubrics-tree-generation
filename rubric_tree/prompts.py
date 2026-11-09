@@ -59,9 +59,9 @@ SCHEMA = """\
 
 The tree has four branches. A branch root is {"description": "...", "children": [...]}.
 
-- intention (3-6 leaves): the core goals. "Does this app do what the user wanted at all?"
-- content (0-15 leaves): the information the app shows. Accuracy, completeness, fit to the user's context, internal consistency (sums, dates), freshness. An empty children list only if the query has no content needs (for example a pure chess game).
-- static (4-12 leaves): visible structure and look on load. Required sections and elements, readable layout, mobile layout when the user said "APP", visual style when the user asked for one.
+- intention: the core goals. "Does this app do what the user wanted at all?"
+- content: the information the app shows. Accuracy, completeness, fit to the user's context, internal consistency (sums, dates), freshness. An empty children list only if the query has no content needs (for example a pure chess game).
+- static: visible structure and look on load. Required sections and elements, readable layout, mobile layout when the user said "APP", visual style when the user asked for one.
 - dynamic: exactly two children, in this order: basic interactions, then complex interactions.
   - basic: single-step interactions (tap, type, select, play).
   - complex: multi-step flows and state changes (create -> reload -> still there; finish a game; switch person and see other data).
@@ -71,8 +71,8 @@ Every node below a branch root has these fields:
 - critical: true or false. Only a leaf can be critical. A critical leaf is a hard boundary: if it fails, the score of the whole app is 0, whatever the other leaves say. If no critical leaf fails, the score is the share of leaves that pass. Every leaf has the same weight, so the number of leaves that check a need is the weight of that need.
 - children: a list of nodes for a group; null for a leaf.
 A leaf also has:
-- origin: "explicit" (stated in the query) | "implicit" (inferred from the query's context) | "archetype" (default expectation for this kind of app).
-- covers: the spec requirement ids (R1, R2, ...) that the leaf checks. Required for explicit and implicit leaves.
+- origin: "explicit" (stated in the query) | "implicit" (a must-be quality: inferred from the query's context or from what every product of this kind has) | "attractive" (a feature the user did not ask for but would value) | "archetype" (default expectation for this kind of app).
+- covers: the spec requirement ids (R1, R2, ...) that the leaf checks. Required for explicit, implicit and attractive leaves.
 - verify_by: "view" (visible on load or in the code) | "interaction" (needs user actions) | "fact" (needs external knowledge or a search to check). Every leaf under dynamic uses "interaction".
 - note (optional): guidance for the judge: tolerance, accepted alternatives.
 
@@ -80,17 +80,18 @@ Do not write ids; code assigns them.
 Size: 15-40 leaves in total, depending on how complex the query is. At most 4 levels below a branch root.
 If the query implies an archetype expectation, write it as an implicit leaf with a covers id instead.
 Every spec requirement is in the covers of at least one leaf.
+Attractive leaves: check each attractive requirement with one leaf, origin "attractive", that covers only attractive requirements. No other leaf covers an attractive requirement. At most 4 attractive leaves per tree (code checks). An attractive leaf is never critical. Otherwise it is a normal leaf: same weight, same rules.
 Write every description and note in the language of the query."""
 
 LEAF_RULES = f"""\
 ## Leaf-writing rules
 
-1. Atomic: one checkable fact per leaf. No "和/并且" joining two checks.
+1. Atomic: one checkable fact per leaf. If a real app can pass one part of a leaf and fail another, split the leaf. No "和/并且" joining two checks.
 2. Binary and observable: a judge answers yes or no from the app. Observable defects (overlapping or cut-off text, low contrast) are normal leaves. When design_focus is false, code adds one universal leaf for overall visual quality: do not write your own generic look leaf (Bad: "页面很美观"). When design_focus is true, write yes/no leaves for the look the user asked for, each with a note that tells the judge what to look at. Example: "页面整体呈现复古像素游戏风格", note "看字体、图标和边框是否为像素风格".
 3. Self-contained: the leaf makes sense without reading the query.
 4. Functional, not literal: describe the user-visible effect, not a label, layout, element type or library — unless the user named it. Bad: "有一个名为'今日任务'的卡片". Good: "打开应用即可看到当天要做的学习任务".
 5. Feasible in the environment profile. Example for a frontend-only profile: do not require live flight prices; require prices labeled as estimates with a date or source.
-6. Correct facts, but no uncertain facts in the leaf. When the app must show facts (the spec has knowledge_needs), write verify_by: "fact" leaves that check that the facts the user's goal depends on are correct (for example rules, prices, dates, names). If generator_confident is false, write a verify_by: "fact" leaf that states what the judge must check. Bad: "列出电影《X》". Good: "列出的电影在评测时确实在中国大陆院线近期上映". Dates follow the spec: write the absolute dates that the spec resolved against time_frame.date, the user's today. Do not require a fact that became known after that date (for example the results of matches played later). Do not fail an app for showing such a fact when it is correct: a leaf about it accepts both what was known at that date (待定, placeholders) and the correct later fact. Before you write a number that can be computed from data in the query into a leaf or a note, compute it again yourself. Do not copy it from the spec without a check. Check its units and its order of magnitude. If you cannot get the same result again, do not write the number: tell the judge how to compute it.
+6. Correct facts, but no uncertain facts in the leaf. When the app must show facts (the spec has knowledge_needs), write verify_by: "fact" leaves that check that the facts the user's goal depends on are correct (for example rules, prices, dates, names). If generator_confident is false, write a verify_by: "fact" leaf that states what the judge must check. Bad: "列出电影《X》". Good: "列出的电影在评测时确实在中国大陆院线近期上映". A leaf states what the judge checks, not your answer. When reputable sources differ (doses, temperatures, durations, frequencies, thresholds), the leaf checks that the app agrees with an authoritative source, not with your values. Bad: "泡脚水温约37–40℃、每次10–20分钟". Good: "手册给出的泡脚水温和时长与它引用的权威来源一致". Values in a note are examples, not the bar. Dates follow the spec: write the absolute dates that the spec resolved against time_frame.date, the user's today. Do not require a fact that became known after that date (for example the results of matches played later). Do not fail an app for showing such a fact when it is correct: a leaf about it accepts both what was known at that date (待定, placeholders) and the correct later fact. Before you write a number that can be computed from data in the query into a leaf or a note, compute it again yourself. Do not copy it from the spec without a check. Check its units and its order of magnitude. If you cannot get the same result again, do not write the number: tell the judge how to compute it.
 7. Positive polarity: pass = good. Write pitfalls as positive leaves. Example: "预算各项之和与总预算一致".
 8. No double counting. Every leaf has the same weight, so a check that two leaves make counts two times. No two leaves may be duplicates, in the same branch or in different branches, intention included. Two leaves are duplicates when they check the same thing, or when a judge who tests a real app would almost always give both the same answer. Keep one of them. Common cases:
    - An intention leaf and a detailed leaf check the same goal (for example "用户能切换历史会话" and "点击左侧另一个会话，主区域显示该会话的消息"). Keep the leaf in intention, with the more exact wording and note of the two, and remove the other.
@@ -98,32 +99,43 @@ LEAF_RULES = f"""\
    - One feature split into steps that pass or fail together (for example a music player that can play, pause and resume: keep one leaf).
    - The same check again in a later flow, with nothing new to check.
 A single step and a longer flow that contains it are not duplicates when the flow checks something new that can fail after the step works (for example the data is still there after a reload).
-9. Gate by the critical bar. A failed critical leaf sets the whole score to 0. {CRITICAL_BAR} Mark a leaf critical only if it meets this bar by itself and covers at least one critical requirement. When several leaves cover the same critical requirement, mark only the leaf that checks its core. A judge must be able to decide a critical leaf without taste: never mark a look or style leaf critical. At most 5 per tree, not counting the universal leaves: this is a limit, not a target, and fewer is normal. With 5 critical leaves already, a leaf that meets the bar better takes the place of the weakest one. Never on a branch root."""
+9. Gate by the critical bar. A failed critical leaf sets the whole score to 0. {CRITICAL_BAR} Mark a leaf critical only if it meets this bar by itself and covers at least one critical requirement. When several leaves cover the same critical requirement, mark only the leaf that checks its core. A judge must be able to decide a critical leaf without taste: never mark a look or style leaf critical. A critical leaf checks that the app does or answers what the user asked, not that it gives your answer: it states no number, date, name, rule or recommendation that is not in the query. The user's today (spec.time_frame.date) is an estimate, so a leaf whose verdict depends on it (for example "不推荐已经结束的场次" or "报名截止日还没过") is critical only if the query itself states the date. There is no fixed number: every leaf that meets the bar is critical, and no other. Never on a branch root."""
 
 ISSUE_TYPES = """\
-- missing: an explicit or implicit requirement has no adequate leaf, or a core flow is not tested end to end
+- missing: a spec requirement has no adequate leaf, a core flow is not tested end to end, or the tree checks only the core function and misses a must-be quality that every competent product of this kind has and that the main flows need (fix: add it as an archetype leaf)
 - not_atomic: the leaf checks two things
 - subjective: a look leaf without a note that tells the judge what to look at, or a generic look leaf that repeats the universal one
 - over_specific: the leaf demands one implementation where others serve the user equally
 - too_broad: the leaf is too vague to fail
-- ungrounded: the leaf demands a feature with no basis in the query or the archetype (gold-plating);
+- ungrounded: the leaf demands a feature with no basis in the query, the archetype or an attractive requirement (gold-plating). An attractive leaf that covers an attractive requirement is grounded: do not ask to remove it. If its wording is generic, names a mechanism instead of a user-visible result, or goes against a stated wish, give a fix that rewrites it;
 - infeasible: the leaf cannot pass in the environment profile, it requires a fact that was not known at the user's today (spec.time_frame.date), or it fails an app that shows such a fact correctly
-- hardcoded_fact: a leaf or a note states a fact as the expected answer, and the fact is wrong or uncertain. Check every number, name, date and rule yourself; generator_confident in the spec is not proof
+- hardcoded_fact: a leaf or a note states a fact as the expected answer, and the fact is wrong or uncertain. Check every number, name, date and rule yourself; generator_confident in the spec is not proof. Also: a leaf makes one source's values the bar where reputable sources differ (rule 6), or a critical leaf states a value that is not in the query (rule 9)
 - duplicate: two leaves are duplicates by leaf rule 8, in the same branch or in different branches. Give the leaf to remove in leaf_id and the leaf to keep in fix
 - contradiction: two leaves, or a leaf and a note, disagree: one requires something that another calls optional or lets pass without it
 - balance: a critical flag fails the critical bar (a leaf is critical but fails the test, or a leaf meets the test but is not critical), a critical leaf is a look or style leaf, or look leaves outnumber function leaves when design_focus is false
 - wrong_branch: the leaf is in the wrong branch, or verify_by is wrong"""
 
 SPEC_RULES = f"""\
-- The bar for every requirement, explicit or implicit: if the app does not meet it, the user's goal fails or the user is let down. A feature that is only nice to have is not a requirement.
+- There are three types of requirement. They follow the Kano model of product quality: what the user asked for, what the user takes for granted, and what the user did not expect but values.
 - Explicit requirement = stated in the query, or follows directly from words in the query. evidence_quote is those words and must be an exact substring of the query (code checks this). Examples: "高血糖父母" means low-sugar dishes with a low glycemic index; "小孩两岁半" means child-friendly travel; "长期用" means the data persists.
-- Implicit requirement = a need that no words in the query state, but that this user needs in this context, with a rationale that cites the context.
+- Implicit requirement (must-be quality) = a need that no words in the query state, but that a typical user with this request takes for granted. If the app does not meet it, the user is let down; if it does, the user does not notice. It comes from one of two sources:
+  - this user's context. Example: an app to manage the family fridge is used every day, so the records persist.
+  - what every competent product of this kind has today. Examples: an editor can undo a change; the user can edit and delete what they added; a delete asks for confirmation or can be undone; invalid input gets a clear message instead of a wrong result.
+  Write the must-be qualities that the main flows of this app need, not every one that you can think of. The rationale cites the context or the kind of product.
+- Attractive requirement (attractive quality) = a feature that no words in the query state and that the user would not miss, but would notice and value. It serves this user's goal, or the next thing the user does with the result, and the rationale names the words of the query that it serves. Example: the user writes a daily news digest to post in a WeChat group, so the app copies the digest in one click, ready to paste into WeChat. Rules:
+  - 0 to 4 per query (code checks). Fewer is normal: 0 or 1 for a simple or narrow request. Write none that goes against a stated wish, for example a request to keep the app simple or to leave out other features ("别的都不用").
+  - Never critical: a user is not let down by a feature they did not expect.
+  - Specific to this query. Bad: a feature you could add to any app ("有深色模式", "有动画效果"). A quality that users of this kind of product take for granted today is implicit, not attractive.
+  - A user-visible result, not a mechanism or a library. It is feasible in the environment profile.
+  - When there are more candidates than the cap, keep the ones that most users with this request would value most.
+- The bar for explicit and implicit requirements: if the app does not meet it, the user's goal fails or the user is let down. A feature that is only nice to have is not an explicit or implicit requirement; it can be attractive.
 - Make each requirement one need: no "or" lists, no "最好" or "ideally".
-- critical: true or false. {CRITICAL_BAR}
+- A requirement states the need, not the answer: no values that you supply (numbers, doses, durations, dates, names, rules) unless the query states them. Write the facts that you know into knowledge_needs.
+- critical: true or false. Always false for an attractive requirement. {CRITICAL_BAR}
 - Do not write requirements for the environment profile, or for what code checks in every app: the page loads, the UI language, the layout at mobile width.
 - Write text and rationale in the language of the query.
 - time_frame: when the user wrote the query, and the period it is about.
-  - date: the user's today, the day the user wrote the query, not the time of the events in it. It is as_of, unless the query's own words show that the user wrote at another time: an event, a year or a season that does not fit as_of. Work it out from the relative words. Example: as_of is 2026-10-23 and the query says "明年巴黎奥运会". The Paris Olympics were in 2024 and "明年" is the next year, so the user wrote in 2023: the date is "2023", not "2024". Write such a date as "YYYY", "YYYY-MM" or "YYYY-MM-DD", as exact as the query shows, with evidence_quote (an exact substring of the query, checked by code) and a rationale.
+  - date: the user's today, the day the user wrote the query, not the time of the events in it. It is as_of, unless the query's own words show that the user wrote at another time: an event, a year or a season that does not fit as_of. Work it out from the relative words. Example: as_of is 2026-10-23 and the query says "明年巴黎奥运会". The Paris Olympics were in 2024 and "明年" is the next year, so the user wrote in 2023: the date is "2023", not "2024". The query can also show it with no calendar word: the user plans for an event, or asks about it as still to come, but the event ended before as_of. Example: as_of is 2026-10-23 and the query says "今年想去现场看温网". Wimbledon 2026 was from 2026-06-29 to 2026-07-12, and the user plans to go, so the user wrote before 2026-06-29: the date is "2026", and the rationale says "before 2026-06-29". Do this check for every dated event in the query: matches, festivals, exams, holidays, sales and seasons. Keep as_of only if no event in the query ended before as_of while the user still plans for it. Write such a date as "YYYY", "YYYY-MM" or "YYYY-MM-DD", as exact as the query shows, with evidence_quote (an exact substring of the query, checked by code) and a rationale.
   - refers_to: only if the query is about a dated event or period: that period in absolute dates. Example: "2024年7-8月，巴黎奥运会".
   When the date is as_of, write {{"date": as_of}}, plus refers_to if the query has one.
 - Resolve calendar words ("今天", "明天", "今年", "明年", "下周", "国庆节", "这届") against time_frame.date into absolute dates in text and rationale, as exact as that date allows, and keep the word: "2024年巴黎奥运会（明年）". An evidence_quote still copies the query exactly. Keep absolute dates from the query as they are.
@@ -143,7 +155,8 @@ SPEC_FORMAT = """\
   "time_frame": {"date": "<as_of>"} | {"date": "2023", "evidence_quote": "...", "rationale": "...", "refers_to": "..."},
   "requirements": [
     {"id": "R1", "type": "explicit", "text": "...", "evidence_quote": "...", "critical": true},
-    {"id": "R2", "type": "implicit", "text": "...", "rationale": "...", "critical": false}
+    {"id": "R2", "type": "implicit", "text": "...", "rationale": "...", "critical": false},
+    {"id": "R3", "type": "attractive", "text": "...", "rationale": "...", "critical": false}
   ],
   "knowledge_needs": [
     {"topic": "...", "generator_confident": true}
@@ -174,6 +187,9 @@ EXAMPLE_SPEC = {
          "critical": True},
         {"id": "R6", "type": "implicit", "text": "吃完或扔掉的食材可以从记录中去掉",
          "rationale": "冰箱里的食材会不断被用掉，记录要跟着变化才有用", "critical": False},
+        {"id": "R7", "type": "attractive", "text": "推荐菜时优先用上快过期的食材",
+         "rationale": "用户既要“快过期的要提醒我”，又要“根据现有食材推荐几道菜”；推荐时先消耗快过期的食材能少浪费，用户没有要求，但会看重",
+         "critical": False},
     ],
     "knowledge_needs": [
         {"topic": "常见家常菜所需的食材", "generator_confident": True},
@@ -200,7 +216,7 @@ EXAMPLE_TREE = {
         _leaf("用户填写食材名称和过期日期后，可以把食材加入清单", "explicit",
               ["R1", "R2"], "interaction", critical=True),
         _leaf("加入一种明天过期的食材后，打开应用的首屏就能看到它快过期的提醒", "explicit", ["R3"], "interaction",
-              note="横幅、角标、标签、置顶都可以；浏览器通知不是必须的"),
+              note="横幅、角标、标签、置顶都可以；浏览器通知不是必须的", critical=True),
         _leaf("用户可以发起推荐，并看到至少一道推荐的菜", "explicit", ["R4"],
               "interaction"),
     ]},
@@ -230,6 +246,8 @@ EXAMPLE_TREE = {
                   "interaction", note="localStorage 或后端保存都可以", critical=True),
             _leaf("清单里的食材变化后，再次推荐的菜随之变化", "explicit", ["R4"],
                   "interaction"),
+            _leaf("清单里有一种明天过期的食材时，推荐的菜中至少有一道用到它", "attractive", ["R7"],
+                  "interaction", note="测试时选一种常用于家常菜的食材，例如鸡蛋或西红柿"),
         ]),
     ]},
 }
@@ -239,7 +257,7 @@ EXAMPLE_DRAFT = {"tree": EXAMPLE_TREE}
 # ── stage prompts ────────────────────────────────────────────────────────────
 
 _SPEC_SYSTEM = Template("""\
-You analyze one request for a web app before anyone writes a rubric for it. Find what the user asked for (explicit requirements), what a reasonable user in this situation also needs (implicit requirements), and which facts a judge must check. Return one JSON object only.
+You analyze one request for a web app before anyone writes a rubric for it. Find what the user asked for (explicit requirements), what a typical user with this request takes for granted (implicit requirements), what this user did not ask for but would value (attractive requirements), and which facts a judge must check. Return one JSON object only.
 
 Rules:
 $rules
@@ -334,7 +352,8 @@ Be strict. Check every leaf against every rule, then check the leaves against ea
 1. For each spec requirement, find all the leaves that cover it, in all four branches, intention included. Report each pair of leaves that are duplicates by rule 8.
 2. Compare each leaf and note with the others. Report each contradiction.
 3. Check each number, name, date and rule in the leaves and notes yourself. Compute again each number that can be computed from data in the query, and check its units and order of magnitude. Report a wrong one as hardcoded_fact.
-4. Apply the critical bar to every leaf, critical or not. The tree may have at most 5 critical leaves besides the universal ones. If it has 5 and another leaf meets the bar better, ask for a swap: the fix names the critical leaf that becomes non-critical. Never ask for more than 5.
+4. Apply the critical bar to every leaf, critical or not.
+5. Check that the leaves cover the must-be qualities of this kind of product that the main flows need, not only the core function.
 Report every problem that you find, not only the first few.
 
 severity: "blocking" if the issue changes a verdict or the score in a way the user would not accept: a missing core check, a check that a good app can fail, a wrong gate, looks that outweigh function, a duplicate, a contradiction, a wrong fact. "minor" if a judge would still read and score the leaf correctly.
@@ -514,7 +533,7 @@ def _universal_note(universal: list[dict]) -> str:
     lines = "\n".join(
         f"- {u['description']}" + (" (critical)" if u["critical"] else "") for u in universal)
     return ("Code adds these universal leaves to the static branch. Do not write them "
-            "yourself. They count toward the leaf limits, not toward the critical limit:\n"
+            "yourself. They count toward the leaf limits:\n"
             + lines)
 
 

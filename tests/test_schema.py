@@ -47,18 +47,11 @@ def _drop_branch(rec):
     del rec["tree"]["content"]
 
 
-def _many_critical(rec):
-    for nid in ("I.1", "I.2", "I.3", "C.1", "C.2"):
-        node(rec, nid)["critical"] = True
-
-
-def test_universal_leaves_do_not_count_toward_the_critical_cap():
+def test_there_is_no_cap_on_critical_leaves():
     rec = record()
-    _many_critical(rec)
-    node(rec, "C.2")["critical"] = False   # 5 critical leaves + the critical universal one
-    assert any(n.get("origin") == "universal" and n.get("critical")
-               for n, _ in schema.iter_nodes(rec["tree"]["static"]))
-    assert not [e for e in schema.validate(rec) if "critical nodes" in e]
+    for nid in ("I.1", "C.1", "S.1.1", "D.B.1", "D.B.2", "D.B.3"):   # all cover R1 only
+        node(rec, nid)["critical"] = True
+    assert schema.validate(rec) == []
 
 
 def _extra_requirement(rec):
@@ -68,6 +61,27 @@ def _extra_requirement(rec):
 
 def _too_many_leaves(rec):
     rec["tree"]["intention"]["children"] += [leaf(f"多余{i}") for i in range(30)]
+
+
+def _attractive(rec, n):
+    """Add n attractive requirements, each with its own attractive leaf."""
+    for i in range(n):
+        rid = f"R{10 + i}"
+        rec["spec"]["requirements"].append(
+            {"id": rid, "type": "attractive", "text": f"加分{i}", "rationale": "y", "critical": False})
+        rec["tree"]["intention"]["children"].append(leaf(f"加分项{i}", [rid], origin="attractive"))
+    schema.assign_ids(rec["tree"])
+
+
+def test_four_attractive_leaves_pass():
+    rec = record()
+    _attractive(rec, 4)
+    assert schema.validate(rec) == []
+
+
+def _five_attractive_leaves(rec):
+    _attractive(rec, 4)
+    rec["tree"]["static"]["children"].append(leaf("加分项4", ["R10"], origin="attractive"))
 
 
 # (name, mutation, part of the expected error) — one failing fixture per rule.
@@ -103,12 +117,26 @@ CASES = [
     ("origin enum", lambda r: node(r, "S.2").update(origin="guess"), "S.2: origin must be one of"),
     ("verify_by enum", lambda r: node(r, "S.2").update(verify_by="smell"), "S.2: verify_by must be"),
     ("note type", lambda r: node(r, "S.2").update(note=3), "S.2: note must be a string"),
-    ("too many critical", _many_critical, "tree has 6 critical nodes besides the universal leaves; max 5"),
     ("critical root", lambda r: r["tree"]["static"].update(critical=True),
      "S: a branch root must not be critical"),
     ("duplicate description", lambda r: node(r, "S.2").update(description="能记录 喝水！"),
      "S.2: same description as I.1"),
     ("duplicate id", lambda r: node(r, "S.2").update(id="S.3"), "id 'S.3' is not unique"),
+    ("too many attractive leaves", _five_attractive_leaves, "tree has 5 attractive leaves; max 4"),
+    ("too many attractive requirements", lambda r: _attractive(r, 5),
+     "spec has 5 attractive requirements; max 4"),
+    ("critical attractive leaf",
+     lambda r: (_attractive(r, 1), r["tree"]["intention"]["children"][-1].update(critical=True)),
+     "an attractive leaf must not be critical"),
+    ("critical attractive requirement",
+     lambda r: (_attractive(r, 1), r["spec"]["requirements"][-1].update(critical=True)),
+     "an attractive requirement must not be critical"),
+    ("attractive leaf covers a must-have",
+     lambda r: (_attractive(r, 1), r["tree"]["intention"]["children"][-1].update(covers=["R10", "R1"])),
+     "an attractive leaf must cover only attractive requirements"),
+    ("other leaf covers an attractive requirement",
+     lambda r: (_attractive(r, 1), node(r, "S.2").update(covers=["R10"])),
+     "must have origin \"attractive\""),
 ]
 
 
@@ -128,7 +156,7 @@ SPEC_CASES = [
     ("requirements", lambda s: s.update(requirements=[]), "spec.requirements must be a non-empty"),
     ("requirement id", lambda s: s["requirements"][1].update(id="R1"), "id must be a unique"),
     ("requirement critical", lambda s: s["requirements"][0].update(critical=5), "critical must be"),
-    ("type", lambda s: s["requirements"][0].update(type="stated"), "type must be explicit"),
+    ("type", lambda s: s["requirements"][0].update(type="stated"), "type must be one of explicit"),
     ("rationale", lambda s: s["requirements"][3].pop("rationale"), "needs a rationale"),
     ("knowledge need", lambda s: s["knowledge_needs"][0].update(generator_confident="yes"),
      "spec.knowledge_needs[0] needs"),
